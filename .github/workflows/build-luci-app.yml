@@ -19,6 +19,7 @@ on:
 env:
   OPENWRT_VERSION: v24.10.3
   PACKAGE_NAME: luci-app-tailscale
+  TRANSLATION_PKG: tailscale
   SDK_DIR: /home/runner/work/openwrt-sdk
 
 permissions:
@@ -107,10 +108,9 @@ jobs:
       - name: Compile ipk
         working-directory: ${{ env.SDK_DIR }}
         run: |
-          translation_pkg="${{ env.PACKAGE_NAME#luci-app- }}"
           {
             echo "CONFIG_PACKAGE_${{ env.PACKAGE_NAME }}=m"
-            echo "CONFIG_PACKAGE_luci-i18n-${translation_pkg}-zh-cn=m"
+            echo "CONFIG_PACKAGE_luci-i18n-${{ env.TRANSLATION_PKG }}-zh-cn=m"
             echo "CONFIG_LUCI_LANG_zh_Hans=y"
           } > .config
           make defconfig
@@ -119,7 +119,7 @@ jobs:
           mkdir -p output_ipk
           find ./bin/packages -type f \( \
             -name "${{ env.PACKAGE_NAME }}*.ipk" -o \
-            -name "luci-i18n-${translation_pkg}-*.ipk" \
+            -name "luci-i18n-${{ env.TRANSLATION_PKG }}-*.ipk" \
           \) -exec cp {} output_ipk/ \;
 
           if [ -z "$(ls -A output_ipk 2>/dev/null)" ]; then
