@@ -1,0 +1,42 @@
+{
+	"luci-app-tailscale": {
+		"description": "Grant access to Tailscale management",
+		"read": {
+			"ubus": {
+				"tailscale": [
+					"get_overview",
+					"get_status",
+					"get_login_progress",
+					"get_up_settings",
+					"list_versions",
+					"check_update"
+				]
+			},
+			"uci": [ "tailscale" ],
+			"file": {
+				"/etc/tailscale/*": [ "read" ],
+				"/etc/config/tailscaled.state": [ "read" ],
+				"/var/log/tailscale*.log": [ "read" ]
+			}
+		},
+		"write": {
+			"ubus": {
+				"tailscale": [
+					"run_install",
+					"run_uninstall",
+					"set_up_settings",
+					"apply_up_settings",
+					"start_login",
+					"do_login",
+					"do_logout",
+					"set_service_enabled"
+				]
+			},
+			"uci": [ "tailscale" ],
+			"file": {
+				"/etc/tailscale/*": [ "write" ],
+				"/etc/config/tailscaled.state": [ "write" ]
+			}
+		}
+	}
+}

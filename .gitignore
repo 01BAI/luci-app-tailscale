@@ -1,0 +1,8 @@
+.reference/
+openwrt-sdk/
+openwrt/
+*.ipk
+*.tar.*
+.DS_Store
+*.swp
+*.log

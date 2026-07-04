@@ -1,0 +1,4 @@
+config settings 'settings'
+	option enabled '1'
+	option auto_update '0'
+	option version 'latest'

@@ -1,0 +1,133 @@
+# 从 Tailscale 官方源码交叉编译 tailscaled，发布到本仓库 GitHub Release。
+# 产物命名与 OpenWrt 安装脚本一致：tailscaled-linux-<arch>
+#
+# 使用：GitHub 网页 → Actions → Build tailscaled for OpenWrt → Run workflow
+
+name: Build tailscaled for OpenWrt
+
+on:
+  workflow_dispatch:
+    inputs:
+      tailscale_version:
+        description: "Tailscale 版本 tag，例如 v1.98.8；留空则自动取官方 latest"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.out.outputs.tag }}
+      version: ${{ steps.out.outputs.version }}
+    steps:
+      - name: Resolve Tailscale version
+        id: out
+        run: |
+          INPUT="${{ github.event.inputs.tailscale_version }}"
+          if [ -n "$INPUT" ]; then
+            TAG="$INPUT"
+          else
+            TAG="$(curl -fsSL https://api.github.com/repos/tailscale/tailscale/releases/latest | jq -r '.tag_name')"
+          fi
+          [ -n "$TAG" ] && [ "$TAG" != "null" ] || { echo "无法获取 Tailscale 版本"; exit 1; }
+          VER="${TAG#v}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VER}" >> "$GITHUB_OUTPUT"
+          echo "将构建 Tailscale ${TAG}"
+
+  build:
+    needs: resolve
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64,    goarch: amd64,    goarm: "", gomips: "" }
+          - { arch: 386,      goarch: 386,      goarm: "", gomips: "" }
+          - { arch: arm,      goarch: arm,      goarm: "7", gomips: "" }
+          - { arch: arm64,    goarch: arm64,    goarm: "", gomips: "" }
+          - { arch: mips,     goarch: mips,     goarm: "", gomips: softfloat }
+          - { arch: mipsle,   goarch: mipsle,   goarm: "", gomips: softfloat }
+          - { arch: mips64,   goarch: mips64,   goarm: "", gomips: "" }
+          - { arch: mips64le, goarch: mips64le, goarm: "", gomips: "" }
+
+    steps:
+      - name: Checkout Tailscale source
+        uses: actions/checkout@v4
+        with:
+          repository: tailscale/tailscale
+          ref: ${{ needs.resolve.outputs.tag }}
+          path: tailscale-src
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: tailscale-src/go.mod
+
+      - name: Generate version metadata
+        id: ver
+        working-directory: tailscale-src
+        run: |
+          eval "$(CGO_ENABLED=0 go run ./cmd/mkversion)"
+          echo "long=${VERSION_LONG}" >> "$GITHUB_OUTPUT"
+          echo "short=${VERSION_SHORT}" >> "$GITHUB_OUTPUT"
+
+      - name: Build tailscaled (${{ matrix.arch }})
+        working-directory: tailscale-src
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+          GOMIPS: ${{ matrix.gomips }}
+        run: |
+          ./build_dist.sh --extra-small --box -o "tailscaled-linux-${{ matrix.arch }}" ./cmd/tailscaled
+          chmod +x "tailscaled-linux-${{ matrix.arch }}"
+          file "tailscaled-linux-${{ matrix.arch }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tailscaled-${{ matrix.arch }}
+          path: tailscale-src/tailscaled-linux-${{ matrix.arch }}
+          if-no-files-found: error
+
+  release:
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          ls -la
+          sha256sum tailscaled-linux-* > SHA256SUMS.txt
+          md5sum tailscaled-linux-* > MD5SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.resolve.outputs.tag }}
+          name: Tailscale ${{ needs.resolve.outputs.tag }} (OpenWrt binaries)
+          draft: false
+          prerelease: false
+          make_latest: true
+          body: |
+            由 GitHub Actions 从 [tailscale/tailscale](https://github.com/tailscale/tailscale) `${{ needs.resolve.outputs.tag }}` 交叉编译。
+
+            供 **luci-app-tailscale** / `fetch_and_install.sh` 下载安装。
+          files: |
+            dist/tailscaled-linux-*
+            dist/SHA256SUMS.txt
+            dist/MD5SUMS.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

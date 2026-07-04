@@ -1,0 +1,152 @@
+.tailscale-overview {
+	--ts-indent: 2.5rem;
+	--ts-label-w: 7rem;
+	--ts-value-w: 11rem;
+	--ts-gap: 2rem;
+	--ts-actions-gap: 4rem;
+}
+
+/* 各卡片去掉左右内边距，由 grid 统一控制列起点 */
+.tailscale-overview > .cbi-section {
+	padding-left: 0;
+	padding-right: 0;
+}
+
+.tailscale-overview > .cbi-section > h3 {
+	padding-left: var(--ts-indent);
+	padding-right: 1rem;
+}
+
+/* 三列：标签 | 值/状态 | 按钮（各模块共用同一列宽，按钮列垂直对齐） */
+.tailscale-overview .ts-grid-3,
+.tailscale-overview .ts-grid-2 {
+	display: grid;
+	grid-template-columns:
+		minmax(0, var(--ts-label-w))
+		minmax(0, var(--ts-value-w))
+		minmax(0, 1fr);
+	column-gap: var(--ts-gap);
+	row-gap: 0.55rem;
+	padding: 0.25rem 1rem 0.6rem var(--ts-indent);
+	align-items: center;
+	width: 100%;
+	box-sizing: border-box;
+}
+
+/* 连接设置：前两列与上方对齐，控件从第 2 列起可延伸到右侧 */
+.tailscale-overview .ts-grid-2 {
+	row-gap: 0.95rem;
+	padding-top: 0.45rem;
+	padding-bottom: 0.85rem;
+}
+
+.tailscale-overview .ts-grid-2 .ts-value {
+	grid-column: 2 / -1;
+	min-width: 0;
+}
+
+.tailscale-overview .ts-label {
+	line-height: 1.5;
+	white-space: nowrap;
+}
+
+.tailscale-overview .ts-grid-2 .ts-label {
+	white-space: normal;
+	line-height: 1.6;
+	padding-right: 0.25rem;
+}
+
+.tailscale-overview .ts-settings-label {
+	display: flex;
+	flex-direction: column;
+	gap: 0.15rem;
+	line-height: 1.35;
+}
+
+.tailscale-overview .ts-cli-param {
+	font-size: 0.82em;
+	color: #666;
+}
+
+.tailscale-overview .ts-value {
+	line-height: 1.5;
+	min-width: 0;
+}
+
+.tailscale-overview .ts-actions {
+	padding-left: var(--ts-actions-gap);
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 0.45rem;
+	min-height: 1.75rem;
+	justify-content: flex-start;
+}
+
+.tailscale-overview .ts-hint {
+	margin-left: 0.5rem;
+	color: #888;
+	font-size: 0.95em;
+}
+
+.tailscale-overview .ts-field-actions {
+	padding: 0.85rem 1rem 0.85rem calc(var(--ts-indent) + var(--ts-label-w) + var(--ts-gap));
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+}
+
+.tailscale-overview .ts-input {
+	width: 100%;
+	max-width: 22rem;
+}
+
+.tailscale-overview .ts-grid-2 input[type="checkbox"] {
+	margin: 0;
+	vertical-align: middle;
+}
+
+.tailscale-overview .ts-grid-2 select.ts-input {
+	width: 100%;
+	max-width: 22rem;
+}
+
+.tailscale-overview .ts-login-url-text a {
+	word-break: break-all;
+}
+
+.tailscale-overview .ts-login-url .btn {
+	margin-top: 0.35rem;
+}
+
+.tailscale-overview .ts-settings-hint {
+	margin: 0 1rem 0.75rem var(--ts-indent);
+	color: #a94442;
+	font-size: 0.95em;
+	line-height: 1.5;
+}
+
+.tailscale-overview .ts-peers-value {
+	grid-column: 2 / -1;
+	min-width: 0;
+	align-self: start;
+	padding-top: 0.15rem;
+}
+
+.tailscale-overview .ts-peers-table {
+	margin: 0;
+	width: 100%;
+	max-width: 36rem;
+	font-size: 0.95em;
+}
+
+.tailscale-overview .ts-peers-table .th,
+.tailscale-overview .ts-peers-table .td {
+	padding: 0.35rem 0.5rem;
+	white-space: nowrap;
+}
+
+.tailscale-overview .ts-peers-table .td:first-child {
+	font-family: monospace;
+	font-size: 0.92em;
+}

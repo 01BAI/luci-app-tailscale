@@ -1,0 +1,209 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: luci-app-tailscale\n"
+"Language: zh_Hans\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+
+msgid "Tailscale"
+msgstr "Tailscale"
+
+msgid "Install / Reinstall"
+msgstr "安装 / 重装"
+
+msgid "Install Mode"
+msgstr "安装模式"
+
+msgid "Local (/usr/local/bin/tailscaled)"
+msgstr "本地安装 (/usr/local/bin/tailscaled)"
+
+msgid "Memory (/tmp/tailscaled)"
+msgstr "内存安装 (/tmp/tailscaled)"
+
+msgid "Local mode persists across reboot. Memory mode stores binary in /tmp and re-downloads on boot."
+msgstr "本地模式重启后保留；内存模式二进制存放在 /tmp，重启后需重新下载。"
+
+msgid "Auto Update"
+msgstr "自动更新"
+
+msgid "Version"
+msgstr "版本"
+
+msgid "Latest"
+msgstr "最新版"
+
+msgid "GitHub Direct"
+msgstr "GitHub 直连"
+
+msgid "Install Tailscale"
+msgstr "安装 Tailscale"
+
+msgid "Reinstall Tailscale"
+msgstr "重装 Tailscale"
+
+msgid "Status"
+msgstr "状态"
+
+msgid "Master Switch"
+msgstr "总开关"
+
+msgid "Runtime Status"
+msgstr "运行状态"
+
+msgid "Login Status"
+msgstr "登录状态"
+
+msgid "Tailscale IP"
+msgstr "Tailscale IP"
+
+msgid "Tailnet"
+msgstr "Tailnet"
+
+msgid "Running"
+msgstr "运行中"
+
+msgid "Stopped"
+msgstr "已停止"
+
+msgid "Needs Login"
+msgstr "需要登录"
+
+msgid "Not Installed"
+msgstr "未安装"
+
+msgid "Service Disabled"
+msgstr "服务已关闭"
+
+msgid "Logged In"
+msgstr "已登录"
+
+msgid "Service Stopped"
+msgstr "服务已停止"
+
+msgid "Login"
+msgstr "登录"
+
+msgid "Logout"
+msgstr "登出"
+
+msgid "Open login URL in browser."
+msgstr "请在浏览器中打开登录链接。"
+
+msgid "Storage Paths"
+msgstr "文件路径"
+
+msgid "Purpose"
+msgstr "用途"
+
+msgid "Path"
+msgstr "路径"
+
+msgid "Binary (local mode)"
+msgstr "二进制（本地模式）"
+
+msgid "Binary (memory mode)"
+msgstr "二进制（内存模式）"
+
+msgid "CLI symlink"
+msgstr "CLI 软链接"
+
+msgid "Install config"
+msgstr "安装配置"
+
+msgid "tailscale up config"
+msgstr "tailscale up 配置"
+
+msgid "Daemon state"
+msgstr "守护进程状态"
+
+msgid "Version record"
+msgstr "版本记录"
+
+msgid "Init script"
+msgstr "启动脚本"
+
+msgid "LuCI UCI config"
+msgstr "LuCI UCI 配置"
+
+msgid "File locations after installation:"
+msgstr "安装后文件存放位置："
+
+msgid "Connection Settings (tailscale up)"
+msgstr "连接设置 (tailscale up)"
+
+msgid "Install Tailscale first."
+msgstr "请先安装 Tailscale。"
+
+msgid "Accept Routes"
+msgstr "接受路由"
+
+msgid "Accept routes from other nodes."
+msgstr "接受其他节点通告的子网路由。"
+
+msgid "Advertise Exit Node"
+msgstr "宣告出口节点"
+
+msgid "Advertise Routes"
+msgstr "宣告路由"
+
+msgid "Exit Node"
+msgstr "出口节点"
+
+msgid "Exit Node Allow LAN"
+msgstr "出口节点允许访问局域网"
+
+msgid "Shields Up"
+msgstr "屏蔽入站"
+
+msgid "Tailscale SSH"
+msgstr "Tailscale SSH"
+
+msgid "Hostname"
+msgstr "主机名"
+
+msgid "Auth Key"
+msgstr "授权密钥"
+
+msgid "Login Server"
+msgstr "登录服务器"
+
+msgid "Netfilter Mode"
+msgstr "Netfilter 模式"
+
+msgid "Save"
+msgstr "保存"
+
+msgid "Save & Apply"
+msgstr "保存并应用"
+
+msgid "Settings saved."
+msgstr "设置已保存。"
+
+msgid "Peers"
+msgstr "节点"
+
+msgid "Online"
+msgstr "在线"
+
+msgid "Offline"
+msgstr "离线"
+
+msgid "OS"
+msgstr "操作系统"
+
+msgid "Welcome"
+msgstr "欢迎使用"
+
+msgid "Tailscale is not installed yet. Choose options below and click Install."
+msgstr "尚未安装 Tailscale。请在下方选择选项并点击安装。"
+
+msgid "Installing"
+msgstr "正在安装"
+
+msgid "Please wait..."
+msgstr "请稍候..."
+
+msgid "Unknown"
+msgstr "未知"
+
+msgid "IP"
+msgstr "IP"
