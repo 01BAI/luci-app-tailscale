@@ -1,9 +1,9 @@
-# 自动编译 luci-app-tailscale ipk，发布到 GitHub Pages（opkg 软件源）。
+# 自动编译 luci-app-tailscale ipk，发布到 GitHub Release 供手动安装。
 # LuCI 包架构为 all，任意 OpenWrt 路由器均可安装同一 ipk。
 #
 # 使用：
-#   - push 到 main：自动编译并更新 Pages 软件源
-#   - 打 tag luci-v*（如 luci-v1.0.0）：额外创建 GitHub Release 附件
+#   - push 到 main：编译并更新预发布 luci-latest（附 ipk 下载）
+#   - 打 tag luci-v*（如 luci-v1.0.0）：创建正式 Release
 #   - Actions → Build luci-app-tailscale → Run workflow
 
 name: Build luci-app-tailscale
@@ -35,16 +35,8 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential rsync unzip zstd coreutils cmake
+          sudo apt-get install -y build-essential rsync unzip zstd coreutils
           sudo ln -sf /usr/bin/sha256sum /usr/bin/sha256
-
-      - name: Setup usign
-        run: |
-          git clone --depth 1 https://github.com/openwrt/usign.git
-          cd usign && mkdir build && cd build
-          cmake .. && make -j"$(nproc)"
-          sudo make install
-          cd ../.. && rm -rf usign
 
       - name: Cache OpenWrt SDK
         id: cache-sdk
@@ -109,7 +101,7 @@ jobs:
             echo "PKG_VERSION=${NEW_VER} PKG_RELEASE=${NEW_REL}"
           fi
 
-          rm -rf output_ipk upload
+          rm -rf output_ipk
           find ./bin -type f -name "${{ env.PACKAGE_NAME }}*.ipk" -delete 2>/dev/null || true
 
       - name: Compile ipk
@@ -137,114 +129,17 @@ jobs:
           fi
           ls -la output_ipk/
 
-      - name: Sign and index
-        id: collect
-        working-directory: ${{ env.SDK_DIR }}
-        run: |
-          REL_PATH="all"
-          mkdir -p "upload/${REL_PATH}"
-          cp output_ipk/*.ipk "upload/${REL_PATH}/"
-
-          if [ -z "${{ secrets.USIGN_KEY }}" ]; then
-            echo "::warning title=Missing USIGN_KEY::未配置 USIGN_KEY，本次使用临时签名密钥"
-            usign -G -s /tmp/key-build.sig -p "upload/${REL_PATH}/key-build.pub" -c "luci-app-tailscale CI"
-          else
-            echo "${{ secrets.USIGN_KEY }}" > /tmp/key-build.sig
-            KEY_HEX="$(tail -n 1 /tmp/key-build.sig | base64 -d | xxd -p | tr -d '\n')"
-            [ "${#KEY_HEX}" -eq 208 ] || { echo "::error::USIGN_KEY 无效"; exit 1; }
-            echo "untrusted comment: public key ${KEY_HEX:64:16}" > "upload/${REL_PATH}/key-build.pub"
-            echo "${KEY_HEX:0:4}${KEY_HEX:64:16}${KEY_HEX:144:64}" | xxd -r -p | base64 -w 0 >> "upload/${REL_PATH}/key-build.pub"
-          fi
-
-          TARGET_DIR="upload/${REL_PATH}"
-          touch "${TARGET_DIR}/Packages"
-          for ipk in "${TARGET_DIR}"/*.ipk; do
-            pkg_info="$(tar -xOzf "$ipk" ./control.tar.gz | tar -xOzf - ./control)"
-            {
-              echo "$pkg_info"
-              echo "Filename: $(basename "$ipk")"
-              echo "Size: $(stat -c%s "$ipk")"
-              echo "SHA256sum: $(sha256sum "$ipk" | awk '{print $1}')"
-              echo ""
-            } >> "${TARGET_DIR}/Packages"
-          done
-          gzip -9nc "${TARGET_DIR}/Packages" > "${TARGET_DIR}/Packages.gz"
-          usign -S -m "${TARGET_DIR}/Packages" -s /tmp/key-build.sig -x "${TARGET_DIR}/Packages.sig"
-          rm -f /tmp/key-build.sig
-
-          echo "path=upload" >> "$GITHUB_OUTPUT"
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: luci-app-tailscale-ipk
-          path: ${{ env.SDK_DIR }}/upload
-
-  deploy-pages:
-    name: Deploy opkg feed (GitHub Pages)
-    runs-on: ubuntu-latest
-    needs: build
-    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/luci-v') || github.event_name == 'workflow_dispatch')
-    steps:
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: luci-app-tailscale-ipk
-          path: feed
-
-      - name: Prepare Pages site
-        run: |
-          mkdir -p deploy/all
-          cp feed/all/* deploy/all/
-          touch deploy/.nojekyll
-
-          OWNER_LC="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
-          REPO='${{ github.event.repository.name }}'
-          FEED_URL="https://${OWNER_LC}.github.io/${REPO}/all"
-
-          cat > deploy/index.html <<EOF
-          <!DOCTYPE html>
-          <html lang="zh-CN">
-          <head>
-            <meta charset="utf-8">
-            <title>luci-app-tailscale opkg feed</title>
-            <style>
-              body { font-family: system-ui, sans-serif; line-height: 1.6; max-width: 720px; margin: 40px auto; padding: 0 20px; }
-              pre { background: #f6f8fa; padding: 16px; border-radius: 6px; overflow: auto; }
-            </style>
-          </head>
-          <body>
-            <h1>luci-app-tailscale</h1>
-            <p>OpenWrt LuCI 插件 opkg 软件源（架构 <code>all</code>，适用各平台路由器）。</p>
-            <h2>安装</h2>
-            <pre><code># 1. 添加公钥
-          wget ${FEED_URL}/key-build.pub -O /tmp/key-build.pub
-          opkg-key add /tmp/key-build.pub
-
-          # 2. 添加软件源
-          echo "src/gz luci-app-tailscale ${FEED_URL}" >> /etc/opkg/customfeeds.conf
-
-          # 3. 安装
-          opkg update
-          opkg install luci-app-tailscale luci-i18n-tailscale-zh-cn</code></pre>
-            <p>Feed URL: <code>${FEED_URL}</code></p>
-            <p><a href="https://github.com/${{ github.repository }}">GitHub 仓库</a></p>
-          </body>
-          </html>
-          EOF
-
-      - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./deploy
-          force_orphan: true
+          path: ${{ env.SDK_DIR }}/output_ipk/*.ipk
 
   release:
-    name: Publish Release (luci-v* tags)
+    name: Publish ipk to GitHub Release
     runs-on: ubuntu-latest
     needs: build
-    if: startsWith(github.ref, 'refs/tags/luci-v')
+    if: github.event_name != 'pull_request'
     steps:
       - name: Download artifact
         uses: actions/download-artifact@v4
@@ -252,10 +147,31 @@ jobs:
           name: luci-app-tailscale-ipk
           path: release-assets
 
-      - name: Create GitHub Release
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/luci-v')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: luci-app-tailscale ${{ github.ref_name }}
           generate_release_notes: true
-          files: release-assets/all/*.ipk
+          files: release-assets/*.ipk
+
+      - name: Publish latest pre-release (main)
+        if: "!startsWith(github.ref, 'refs/tags/luci-v')"
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: luci-latest
+          name: luci-app-tailscale (latest build)
+          prerelease: true
+          make_latest: false
+          body: |
+            由 main 分支自动编译的开发版 ipk，可直接下载后手动安装。
+
+            **正式版请使用 [luci-v* Release](https://github.com/${{ github.repository }}/releases?q=luci-v&expanded=true)。**
+
+            ```sh
+            # 下载后上传到路由器 /tmp，然后：
+            opkg install /tmp/luci-app-tailscale_*.ipk
+            opkg install /tmp/luci-i18n-tailscale-zh-cn_*.ipk
+            ```
+          files: release-assets/*.ipk
