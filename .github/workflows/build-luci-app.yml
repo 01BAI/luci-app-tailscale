@@ -44,7 +44,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.SDK_DIR }}
-          key: ${{ runner.os }}-sdk-x86_64-${{ env.OPENWRT_VERSION }}
+          key: ${{ runner.os }}-sdk-x86_64-${{ env.OPENWRT_VERSION }}-v2
 
       - name: Download and extract OpenWrt SDK
         if: steps.cache-sdk.outputs.cache-hit != 'true'
@@ -72,8 +72,8 @@ jobs:
           rm -f "$sdk_filename"
 
           cd "${{ env.SDK_DIR }}"
-          ./scripts/feeds update luci
-          ./scripts/feeds install -a -p luci
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a -p luci || true
 
       - name: Prepare package
         working-directory: ${{ env.SDK_DIR }}
@@ -114,7 +114,7 @@ jobs:
             echo "CONFIG_LUCI_LANG_zh_Hans=y"
           } > .config
           make defconfig
-          make "package/${{ env.PACKAGE_NAME }}/compile" V=sw -j"$(nproc)"
+          make "package/${{ env.PACKAGE_NAME }}/compile" "package/luci-i18n-${{ env.TRANSLATION_PKG }}-zh-cn/compile" V=s -j"$(nproc)"
 
           mkdir -p output_ipk
           find ./bin/packages -type f \( \

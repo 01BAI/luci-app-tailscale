@@ -45,13 +45,17 @@ ipk 包架构为 **all**，各平台 OpenWrt 路由器通用。从 [GitHub Relea
    - `luci-app-tailscale_*.ipk`
    - `luci-i18n-tailscale-zh-cn_*.ipk`（中文界面，可选）
 
-2. 上传到路由器并安装：
+2. 上传到路由器并安装（首次使用 Tailscale 前，请先安装运行依赖）：
 
 ```sh
+# 路由器上（如尚未安装）
+opkg update
+opkg install curl ca-bundle kmod-tun
+
 # 本机上传（把 IP 换成你的路由器地址）
 scp luci-app-tailscale_*.ipk luci-i18n-tailscale-zh-cn_*.ipk root@192.168.1.1:/tmp/
 
-# 路由器上安装
+# 路由器上安装 LuCI 插件
 opkg install /tmp/luci-app-tailscale_*.ipk
 opkg install /tmp/luci-i18n-tailscale-zh-cn_*.ipk
 ```
