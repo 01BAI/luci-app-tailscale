@@ -28,6 +28,44 @@ flowchart LR
 
 **首次使用前**，需在 GitHub 网页运行一次 Actions：**Actions → Build tailscaled for OpenWrt → Run workflow**（版本留空则自动取官方 latest）。Release 生成后，路由器才能从 LuCI 安装 Tailscale。
 
+---
+
+## 安装 LuCI 插件（其他用户）
+
+本仓库 **push 到 main** 后会自动编译 ipk，并发布到 GitHub Pages 作为 opkg 软件源（包架构 `all`，各平台通用）。
+
+### 1. 启用 GitHub Pages（仓库维护者，仅需一次）
+
+仓库 **Settings → Pages → Build and deployment → Source** 选 **GitHub Actions**。
+
+### 2. 路由器上安装
+
+将 `01BAI` 换成你的 GitHub 用户名（小写访问 Pages 时自动转小写）：
+
+```sh
+# 添加公钥
+wget https://01bai.github.io/luci-app-tailscale/all/key-build.pub -O /tmp/key-build.pub
+opkg-key add /tmp/key-build.pub
+
+# 添加软件源
+echo "src/gz luci-app-tailscale https://01bai.github.io/luci-app-tailscale/all" >> /etc/opkg/customfeeds.conf
+
+# 安装插件与中文语言包
+opkg update
+opkg install luci-app-tailscale luci-i18n-tailscale-zh-cn
+```
+
+安装后在 LuCI：**VPN → Tailscale**。插件会从 `release.conf` 配置的 Release 仓库下载 `tailscaled` 二进制。
+
+### 3. 发布正式版（可选）
+
+打 tag `luci-v1.0.0` 会触发编译，并在 GitHub Release 附上 ipk（与 tailscaled 的 `v1.98.8` 等 tag 互不冲突）。
+
+```sh
+git tag luci-v1.0.0
+git push origin luci-v1.0.0
+```
+
 ### 安装流程（LuCI）
 
 1. 安装本 LuCI 包（ipk 或热部署，见下文）
@@ -113,11 +151,16 @@ scp bin/packages/*/luci/luci-app-tailscale_*.ipk root@192.168.1.1:/tmp/
 ssh root@192.168.1.1 "opkg install --force-overwrite /tmp/luci-app-tailscale_*.ipk"
 ```
 
-### 方式三：发布 tailscaled 二进制
+### 方式三：GitHub Actions 自动编译
+
+| Workflow | 触发 | 产物 |
+|----------|------|------|
+| **Build luci-app-tailscale** | push main / tag `luci-v*` | ipk + [GitHub Pages opkg 源](https://01bai.github.io/luci-app-tailscale/all) |
+| **Build tailscaled for OpenWrt** | 手动 Run workflow | `tailscaled-linux-*` 二进制 Release |
 
 ```sh
-# GitHub 网页：Actions → Build tailscaled for OpenWrt → Run workflow
-# 可选输入 Tailscale 版本 tag（如 v1.98.8），留空则取官方 latest
+# tailscaled：Actions → Build tailscaled for OpenWrt → Run workflow
+# luci 插件：push 到 main 即自动编译；或 Actions 手动 Run workflow
 ```
 
 ---
