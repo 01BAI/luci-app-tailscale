@@ -114,7 +114,7 @@ jobs:
             echo "CONFIG_LUCI_LANG_zh_Hans=y"
           } > .config
           make defconfig
-          make "package/${{ env.PACKAGE_NAME }}/compile" "package/luci-i18n-${{ env.TRANSLATION_PKG }}-zh-cn/compile" V=s -j"$(nproc)"
+          make "package/${{ env.PACKAGE_NAME }}/compile" V=s -j"$(nproc)"
 
           mkdir -p output_ipk
           find ./bin/packages -type f \( \
