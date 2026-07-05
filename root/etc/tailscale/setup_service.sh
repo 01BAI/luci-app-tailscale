@@ -82,3 +82,7 @@ log_info "🛠️  启动服务..."
 /etc/init.d/tailscale restart || { log_error "❌  重启服务失败, 将启动服务"; /etc/init.d/tailscale start > /dev/null 2>&1; }
 
 log_info "🎉  Tailscale 服务已启动!"
+
+if [ -x "$CONFIG_DIR/setup-firewall-lan.sh" ]; then
+	"$CONFIG_DIR/setup-firewall-lan.sh" || log_warn "⚠️  LAN/Tailscale 防火墙配置未完成（可稍后手动执行 setup-firewall-lan.sh）"
+fi

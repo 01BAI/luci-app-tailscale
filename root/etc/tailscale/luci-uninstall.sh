@@ -35,5 +35,7 @@ fi
 uci -q set tailscale.settings.enabled='0' || true
 uci commit tailscale 2>/dev/null || true
 
+[ -x /etc/tailscale/setup-firewall-lan.sh ] && /etc/tailscale/setup-firewall-lan.sh --unregister 2>/dev/null || true
+
 log_info "Tailscale 已卸载（LuCI 与脚本目录保留）"
 echo "OK"
