@@ -22,7 +22,10 @@
 				"/etc/tailscale/*": [ "read" ],
 				"/etc/config/tailscaled.state": [ "read" ],
 				"/var/log/tailscale*.log": [ "read" ],
-				"/tmp/tailscale_luci_install.log": [ "read" ]
+				"/tmp/tailscale_luci_install.log": [ "read" ],
+				"/tmp/tailscale_luci_app_update.log": [ "read" ],
+				"/tmp/tailscale_luci_app_update.status": [ "read" ],
+				"/tmp/tailscale_luci_app_update.pid": [ "read" ]
 			}
 		},
 		"write": {

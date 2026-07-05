@@ -7,7 +7,7 @@
 
 /* 热部署后改此版本号，强制浏览器刷新 CSS/JS */
 const UI_REV = '1.0.1';
-const CSS_REV = '20260705-6';
+const CSS_REV = '20260705-7';
 
 const SETTINGS_FIELDS = [
 	['accept_routes', '接受路由', '--accept-routes', '', 'flag'],
@@ -719,8 +719,7 @@ function runLuciAppUpdate(tag) {
 		style: 'display:none; margin-top:0.75rem;',
 		click: function(ev) {
 			ev.preventDefault();
-			if (pollTimer)
-				clearInterval(pollTimer);
+			stopPoll();
 			ui.hideModal();
 			if (finishedSuccess)
 				location.reload();
@@ -729,14 +728,25 @@ function runLuciAppUpdate(tag) {
 
 	ui.showModal('更新插件', [ statusEl, logEl, closeBtn ]);
 
-	function finishUpdate(success) {
+	function stopPoll() {
 		if (pollTimer) {
 			clearInterval(pollTimer);
 			pollTimer = null;
 		}
+	}
+
+	function updateLog(text) {
+		if (text == null)
+			return;
+		logEl.textContent = text;
+		logEl.scrollTop = logEl.scrollHeight;
+	}
+
+	function finishUpdate(success, message) {
+		stopPoll();
 		statusEl.className = success ? 'label success' : 'alert-message error';
 		finishedSuccess = success;
-		statusEl.textContent = success ? '插件更新完成' : '插件更新失败';
+		statusEl.textContent = message || (success ? '插件更新完成' : '插件更新失败');
 		closeBtn.textContent = success ? '关闭并刷新页面' : '关闭';
 		closeBtn.style.display = '';
 	}
@@ -744,26 +754,41 @@ function runLuciAppUpdate(tag) {
 	function pollProgress() {
 		pollAttempts++;
 		return callGetLuciUpdateProgress().then(function(p) {
-			logEl.textContent = p.log || '';
-			logEl.scrollTop = logEl.scrollHeight;
+			if (!p)
+				throw new Error('无法读取更新进度（RPC 无响应）');
+
+			updateLog(p.log || '');
+
 			if (p.running) {
 				statusEl.className = 'spinning';
 				statusEl.textContent = '正在更新插件，请稍候...';
 				return;
 			}
-			if (p.done)
-				finishUpdate(!!p.success);
+			if (p.done) {
+				finishUpdate(!!p.success, p.success ? '插件更新完成' : (p.message || '插件更新失败'));
+				return;
+			}
+
+			statusEl.className = 'spinning';
+			statusEl.textContent = p.message || '正在启动插件更新...';
+
+			if (pollAttempts >= INSTALL_POLL_MAX)
+				finishUpdate(false, '更新超时（已等待约 ' +
+					Math.round(INSTALL_POLL_MAX * INSTALL_POLL_INTERVAL / 60000) +
+					' 分钟），请查看日志或刷新页面后重试');
+		}).catch(function(err) {
+			stopPoll();
+			finishUpdate(false, (err && err.message) || '读取更新进度失败');
 		});
 	}
 
-	return callRunLuciUpdate({ tag: tag }).then(function(res) {
+	return callRunLuciUpdate(tag).then(function(res) {
 		if (!res || res.success === false)
 			throw new Error((res && res.message) || '无法启动更新');
 		pollTimer = setInterval(pollProgress, INSTALL_POLL_INTERVAL);
 		return pollProgress();
 	}).catch(function(err) {
-		if (pollTimer)
-			clearInterval(pollTimer);
+		stopPoll();
 		ui.hideModal();
 		ui.addNotification(null, E('p', { class: 'alert-message error' },
 			(err && err.message) || '插件更新失败'));
