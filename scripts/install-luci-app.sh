@@ -6,7 +6,7 @@
 #
 # 可选参数：
 #   --repo=用户/仓库        默认 01BAI/luci-app-tailscale
-#   --tag=luci-latest       Release 标签，正式版可用 luci-v1.0.0
+#   --tag=luci-v1.0.0       默认正式版；开发版可用 luci-latest
 #
 # 安装完成后：LuCI → VPN → Tailscale → 点击安装 Tailscale 二进制
 
@@ -14,14 +14,14 @@ set -eu
 set -o pipefail 2>/dev/null || true
 
 REPO="01BAI/luci-app-tailscale"
-TAG="luci-latest"
+TAG="luci-v1.0.1"
 PKG_NAME="luci-app-tailscale"
 TMP_DIR="/tmp/luci-app-tailscale-install.$$"
 
 log() { echo "[install-luci-app] $*" >&2; }
 die() { log "ERROR: $*"; exit 1; }
 
-SCRIPT_REV="2026.07.05-5"
+SCRIPT_REV="2026.07.05-6"
 
 while [ $# -gt 0 ]; do
 	case "$1" in

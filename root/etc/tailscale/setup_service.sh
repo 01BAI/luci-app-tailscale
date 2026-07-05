@@ -34,8 +34,6 @@ start_service() {
   fi
 
   start_tailscaled /usr/bin/tailscaled
-  log_info "🛠️  检测更新, 日志: /tmp/tailscale_update.log"
-  "$CONFIG_DIR/autoupdate.sh" 2>&1 | tee -a /tmp/tailscale_update.log
   schedule_apply_up
 }
 
@@ -74,6 +72,15 @@ schedule_apply_up() {
 EOF
 
 chmod +x /etc/init.d/tailscale
+
+if [ -x "$CONFIG_DIR/luci-setup-cron.sh" ]; then
+	"$CONFIG_DIR/luci-setup-cron.sh" false || log_warn "⚠️  清除 autoupdate 定时任务失败"
+fi
+
+if [ "$TS_REGEN_ONLY" = "1" ]; then
+	log_info "✅ init.d 已更新（TS_REGEN_ONLY，未重启服务）"
+	exit 0
+fi
 
 log_info "🛠️  启用 Tailscale 服务..."
 /etc/init.d/tailscale enable || { log_error "❌  启用服务失败"; exit 1; }

@@ -268,6 +268,97 @@ function is_tailscale_binary_tag(tag) {
 	return length(tag) > 0 && match(tag, /^v[0-9]/);
 }
 
+function is_luci_app_tag(tag) {
+	tag = trim('' + (tag || ''));
+	return length(tag) > 0 && match(tag, /^luci-v[0-9]/);
+}
+
+function read_mirror_prefixes() {
+	let prefixes = [];
+	let builtin = [ 'https://ghfast.top/', 'https://ghproxy.net/', 'https://gh-proxy.com/' ];
+
+	if (access('/etc/tailscale/proxies.txt')) {
+		let content = readfile('/etc/tailscale/proxies.txt');
+		if (content != null) {
+			for (let line in split(content, '\n')) {
+				line = trim(line);
+				if (!length(line) || match(line, /^#/))
+					continue;
+				if (substr(line, length(line) - 1, 1) != '/')
+					line += '/';
+				push(prefixes, line);
+			}
+		}
+	}
+
+	for (let b in builtin)
+		push(prefixes, builtin[b]);
+
+	return prefixes;
+}
+
+function fetch_releases_json_text() {
+	let repo = read_release_repo();
+	let path = `repos/${repo}/releases?per_page=30`;
+	let tmp = '/tmp/tailscale_releases_list.json';
+	let prefixes = [ '' ];
+
+	for (let p in read_mirror_prefixes())
+		push(prefixes, p);
+
+	for (let i = 0; i < length(prefixes); i++) {
+		let prefix = prefixes[i];
+		let api = `${prefix}https://api.github.com/${path}`;
+		let out = exec(`curl -fsSL --connect-timeout 15 --max-time 60 -A 'luci-app-tailscale' '${api}' -o '${tmp}' && cat '${tmp}'`);
+		if (out.code == 0 && length(out.stdout) > 0)
+			return join('', out.stdout);
+	}
+
+	return null;
+}
+
+function latest_luci_tag_from_releases(json_text) {
+	if (json_text == null || !length(json_text))
+		return null;
+
+	try {
+		let releases = json(json_text);
+		for (let r in releases) {
+			let tag = trim('' + (r?.tag_name || ''));
+			if (is_luci_app_tag(tag))
+				return tag;
+		}
+	} catch (e) { /* ignore */ }
+
+	return null;
+}
+
+function latest_binary_tag_from_releases(json_text) {
+	if (json_text == null || !length(json_text))
+		return null;
+
+	try {
+		let releases = json(json_text);
+		for (let r in releases) {
+			let tag = trim('' + (r?.tag_name || ''));
+			if (is_tailscale_binary_tag(tag))
+				return tag;
+		}
+	} catch (e) { /* ignore */ }
+
+	return null;
+}
+
+function get_latest_release() {
+	let json_text = fetch_releases_json_text();
+	return latest_binary_tag_from_releases(json_text);
+}
+
+function get_latest_luci_release() {
+	let json_text = fetch_releases_json_text();
+	return latest_luci_tag_from_releases(json_text);
+}
+
 function fetch_github_releases(page) {
 	let repo = read_release_repo();
 	let bases = [ 'https://api.github.com' ];
@@ -316,27 +407,6 @@ function get_luci_app_version() {
 			return v;
 	}
 	return '';
-}
-
-function get_latest_release() {
-	let repo = read_release_repo();
-	let tmp = '/tmp/tailscale_releases_list.json';
-	let url = `https://api.github.com/repos/${repo}/releases?per_page=30`;
-	let out = exec(`curl -fsSL --connect-timeout 15 -A 'luci-app-tailscale' '${url}' -o '${tmp}' && cat '${tmp}'`);
-
-	if (out.code != 0 || !length(out.stdout))
-		return null;
-
-	try {
-		let releases = json(join('', out.stdout));
-		for (let r in releases) {
-			let tag = r?.tag_name;
-			if (is_tailscale_binary_tag(tag))
-				return tag;
-		}
-	} catch (e) { /* ignore */ }
-
-	return null;
 }
 
 function read_up_settings() {
@@ -569,6 +639,10 @@ const LOGIN_RC_FILE = '/tmp/tailscale_luci_up.status';
 const INSTALL_LOG = '/tmp/tailscale_luci_install.log';
 const INSTALL_PID_FILE = '/tmp/tailscale_luci_install.pid';
 const INSTALL_RC_FILE = '/tmp/tailscale_luci_install.status';
+const LUCID_UPDATE_BG = '/etc/tailscale/luci-update-app-bg.sh';
+const UPDATE_LOG = '/tmp/tailscale_luci_app_update.log';
+const UPDATE_PID_FILE = '/tmp/tailscale_luci_app_update.pid';
+const UPDATE_RC_FILE = '/tmp/tailscale_luci_app_update.status';
 const LOGIN_CMD_FILE = '/tmp/tailscale_luci_up.cmd';
 
 function extract_auth_url_from_log() {
@@ -615,6 +689,30 @@ function read_install_log() {
 	if (!access(INSTALL_LOG))
 		return '';
 	return readfile(INSTALL_LOG) || '';
+}
+
+function luci_update_running() {
+	if (access(UPDATE_RC_FILE))
+		return false;
+	if (!access(UPDATE_PID_FILE))
+		return false;
+	let pid = trim(readfile(UPDATE_PID_FILE) || '');
+	if (!length(pid))
+		return false;
+	return exec(`kill -0 ${pid} 2>/dev/null`).code == 0;
+}
+
+function read_luci_update_rc() {
+	if (!access(UPDATE_RC_FILE))
+		return null;
+	let v = trim(readfile(UPDATE_RC_FILE) || '');
+	return length(v) ? int(v) : null;
+}
+
+function read_luci_update_log() {
+	if (!access(UPDATE_LOG))
+		return '';
+	return readfile(UPDATE_LOG) || '';
 }
 
 function login_log_has_error() {
@@ -893,7 +991,10 @@ function parse_peers_from_json_file() {
 			lastseen: (cols[6] != null ? cols[6] : cols['6']) || '',
 			self: (cols[7] != null ? cols[7] : cols['7']) == 'true',
 			routes: (cols[8] != null ? cols[8] : cols['8']) || '',
-			path: (cols[9] != null ? cols[9] : cols['9']) || ''
+			path: (cols[9] != null ? cols[9] : cols['9']) || '',
+			lasthandshake: (cols[10] != null ? cols[10] : cols['10']) || '',
+			lastwrite: (cols[11] != null ? cols[11] : cols['11']) || '',
+			status_hint: (cols[12] != null ? cols[12] : cols['12']) || ''
 		});
 	}
 
@@ -1067,6 +1168,109 @@ methods.check_update = {
 			latest: latest,
 			has_update: has_update,
 			message: has_update ? ('新版本：' + latest) : '已是最新版'
+		};
+	}
+};
+
+methods.check_updates = {
+	call: function() {
+		let luci_current = get_luci_app_version();
+		let ts_current = get_installed_version();
+		let ts_installed = is_installed();
+		let json_text = fetch_releases_json_text();
+		let luci_latest = latest_luci_tag_from_releases(json_text);
+		let ts_latest = latest_binary_tag_from_releases(json_text);
+
+		let plugin = {
+			current: luci_current,
+			latest: luci_latest || '',
+			latest_tag: luci_latest || '',
+			has_update: 0,
+			success: luci_latest != null ? 1 : 0
+		};
+
+		if (luci_latest) {
+			let current_ver = normalize_version(luci_current);
+			let latest_ver = normalize_version(substr(luci_latest, 6));
+			if (!length(current_ver))
+				plugin.has_update = 1;
+			else if (latest_ver != current_ver)
+				plugin.has_update = 1;
+		}
+
+		let tailscale = {
+			current: ts_current,
+			latest: ts_latest || '',
+			has_update: 0,
+			success: ts_latest != null ? 1 : 0,
+			installed: ts_installed ? 1 : 0
+		};
+
+		if (ts_installed && ts_latest && length(ts_current) &&
+		    normalize_version(ts_current) != normalize_version(ts_latest))
+			tailscale.has_update = 1;
+
+		return {
+			success: (plugin.success || tailscale.success) ? 1 : 0,
+			plugin: plugin,
+			tailscale: tailscale
+		};
+	}
+};
+
+methods.run_luci_update = {
+	args: { tag: '' },
+	call: function(req) {
+		let tag = trim('' + (req?.args?.tag || ''));
+
+		if (!is_luci_app_tag(tag))
+			return { success: false, message: '无效的插件版本标签' };
+
+		if (!access(LUCID_UPDATE_BG))
+			return { success: false, message: '更新脚本不存在: ' + LUCID_UPDATE_BG };
+
+		if (luci_update_running())
+			return { success: true, started: false, running: true, message: '插件更新正在进行中' };
+
+		spawn(`${LUCID_UPDATE_BG} ${shell_quote(tag)}`);
+
+		return { success: true, started: true, running: true, message: '插件更新已启动' };
+	}
+};
+
+methods.get_luci_update_progress = {
+	call: function() {
+		let log_text = trim(read_luci_update_log());
+		let running = luci_update_running();
+		let rc = read_luci_update_rc();
+		let done = !running && rc != null;
+
+		if (done) {
+			return {
+				running: false,
+				done: true,
+				success: rc == 0,
+				log: log_text,
+				message: rc == 0 ? '插件更新成功' : (log_text || ('更新失败，退出码 ' + rc))
+			};
+		}
+
+		if (running) {
+			return {
+				running: true,
+				done: false,
+				success: false,
+				log: log_text,
+				message: log_text ? '更新中...' : '正在启动更新...'
+			};
+		}
+
+		return {
+			running: false,
+			done: false,
+			success: false,
+			log: log_text,
+			message: '尚未开始更新'
 		};
 	}
 };
@@ -1385,15 +1589,26 @@ methods.set_service_enabled = {
 		}
 
 		let out = exec(`/etc/init.d/tailscale ${action} 2>&1`);
-		let msg = join('\n', out.stdout || []);
-		if (length(fw_msg))
-			msg = length(msg) ? msg + '\n' + fw_msg : fw_msg;
+		if (out.code != 0) {
+			let err = join('\n', out.stdout || []);
+			if (length(fw_msg))
+				err = length(err) ? err + '\n' + fw_msg : fw_msg;
+			return {
+				success: false,
+				enabled: on,
+				running: service_running(),
+				message: length(err) ? err : (on ? '启动失败' : '停止失败')
+			};
+		}
+
+		if (on)
+			wait_tailscaled_ready();
 
 		return {
-			success: out.code == 0,
+			success: true,
 			enabled: on,
 			running: service_running(),
-			message: length(msg) ? msg : (on ? '已启用' : '已停用')
+			message: on ? '已启用' : '已停用'
 		};
 	}
 };

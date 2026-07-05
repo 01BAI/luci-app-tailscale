@@ -102,8 +102,6 @@ get_latest_version_from_redirect() {
 
 	try_redirect "" "Release 重定向解析版本" && return 0
 
-	[ "$GITHUB_DIRECT" = "true" ] && return 1
-
 	mirror_list=$(resolve_mirror_list "$MIRROR_LIST")
 	if [ -n "$mirror_list" ] && [ -f "$mirror_list" ]; then
 		while read -r mirror; do
@@ -138,26 +136,24 @@ get_latest_version() {
 		return 0
 	}
 
-	if [ "$GITHUB_DIRECT" != "true" ]; then
-		mirror_list=$(resolve_mirror_list "$MIRROR_LIST")
-		if [ -n "$mirror_list" ] && [ -f "$mirror_list" ]; then
-			while read -r mirror; do
-				mirror=$(echo "$mirror" | sed 's|#.*||; s/^[[:space:]]*//; s/[[:space:]]*$//')
-				[ -z "$mirror" ] && continue
-				mirror=$(echo "$mirror" | sed 's|/*$|/|')
-				log_info "🔗  尝试 releases 列表镜像: ${mirror}https://api.github.com/${GITHUB_API_RELEASES_LIST_SUFFIX}"
-				version=$(fetch_latest_binary_tag_from_list "$mirror") && {
-					echo "$version"
-					return 0
-				}
-				api_url="${mirror}https://api.github.com/${GITHUB_API_LATEST_RELEASE_URL_SUFFIX}"
-				log_info "🔗  尝试 API 镜像: $api_url"
-				version=$(fetch_latest_json "$api_url") && {
-					echo "$version"
-					return 0
-				}
-			done < "$mirror_list"
-		fi
+	mirror_list=$(resolve_mirror_list "$MIRROR_LIST")
+	if [ -n "$mirror_list" ] && [ -f "$mirror_list" ]; then
+		while read -r mirror; do
+			mirror=$(echo "$mirror" | sed 's|#.*||; s/^[[:space:]]*//; s/[[:space:]]*$//')
+			[ -z "$mirror" ] && continue
+			mirror=$(echo "$mirror" | sed 's|/*$|/|')
+			log_info "🔗  尝试 releases 列表镜像: ${mirror}https://api.github.com/${GITHUB_API_RELEASES_LIST_SUFFIX}"
+			version=$(fetch_latest_binary_tag_from_list "$mirror") && {
+				echo "$version"
+				return 0
+			}
+			api_url="${mirror}https://api.github.com/${GITHUB_API_LATEST_RELEASE_URL_SUFFIX}"
+			log_info "🔗  尝试 API 镜像: $api_url"
+			version=$(fetch_latest_json "$api_url") && {
+				echo "$version"
+				return 0
+			}
+		done < "$mirror_list"
 	fi
 
 	if [ -n "${DEFAULT_RELEASE_VERSION:-}" ] && is_tailscale_binary_tag "$DEFAULT_RELEASE_VERSION"; then
@@ -166,11 +162,7 @@ get_latest_version() {
 		return 0
 	fi
 
-	if [ "$GITHUB_DIRECT" = "true" ]; then
-		log_error "❌  错误：GitHub 直连无法解析 tailscaled 版本（仓库 latest 可能为 luci 包，请检查 release.conf 或网络）"
-	else
-		log_error "❌  错误：无法在线获取版本（GitHub / 镜像均失败）"
-	fi
+	log_error "❌  错误：无法在线获取 tailscaled 版本（请检查网络或在 release.conf 设置 DEFAULT_RELEASE_VERSION）"
 	return 1
 }
 
@@ -180,22 +172,13 @@ get_checksum() {
     grep "$target_name" "$sums_file" | grep -v "${target_name}.build" | awk '{print $1}'
 }
 
-download_file() {
-    local url=$1
-    local output=$2
-    local mirror_list=${3:-}
-    local checksum=${4:-}
-    local resolved_mirrors
-
-    if [ "$GITHUB_DIRECT" = "true" ] ; then
-        log_info "📄  使用 GitHub 直连: https://github.com/$url"
-        if webget "$output" "https://github.com/$url" "echooff"; then
-            [ -n "$checksum" ] && verify_checksum "$output" "$checksum"
-            return 0
-        else
-            return 1
-        fi
-    fi
+# 跟随镜像列表尝试下载（直连失败时也会回退到镜像）
+try_download_via_mirrors() {
+    local url="$1"
+    local output="$2"
+    local checksum="${3:-}"
+    local mirror_list="${4:-}"
+    local resolved_mirrors mirror
 
     resolved_mirrors=$(resolve_mirror_list "$mirror_list")
     if [ -n "$resolved_mirrors" ] && [ -f "$resolved_mirrors" ]; then
@@ -217,14 +200,48 @@ download_file() {
             fi
         done < "$resolved_mirrors"
     fi
+    return 1
+}
+
+download_file() {
+    local url=$1
+    local output=$2
+    local mirror_list=${3:-}
+    local checksum=${4:-}
+    local prev_timeout="$TIME_OUT"
+
+    TIME_OUT="${DOWNLOAD_TIME_OUT:-180}"
+
+    if [ "$GITHUB_DIRECT" = "true" ]; then
+        log_info "📄  使用 GitHub 直连: https://github.com/$url"
+        if webget "$output" "https://github.com/$url" "echooff"; then
+            [ -n "$checksum" ] && verify_checksum "$output" "$checksum"
+            TIME_OUT="$prev_timeout"
+            return 0
+        fi
+        log_warn "⚠️  直连失败，尝试镜像..."
+        if try_download_via_mirrors "$url" "$output" "$checksum" "$mirror_list"; then
+            TIME_OUT="$prev_timeout"
+            return 0
+        fi
+        TIME_OUT="$prev_timeout"
+        return 1
+    fi
+
+    if try_download_via_mirrors "$url" "$output" "$checksum" "$mirror_list"; then
+        TIME_OUT="$prev_timeout"
+        return 0
+    fi
 
     log_info "🔗  镜像全部失败，尝试 GitHub 直连: https://github.com/$url"
     if webget "$output" "https://github.com/$url" "echooff"; then
         [ -n "$checksum" ] && verify_checksum "$output" "$checksum"
+        TIME_OUT="$prev_timeout"
         return 0
-    else
-        return 1
     fi
+
+    TIME_OUT="$prev_timeout"
+    return 1
 }
 
 install_tailscale() {

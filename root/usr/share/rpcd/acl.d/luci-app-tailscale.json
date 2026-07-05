@@ -11,7 +11,9 @@
 					"get_up_settings",
 					"list_versions",
 					"check_update",
+					"check_updates",
 					"check_download_network",
+					"get_luci_update_progress",
 					"preview_up_command"
 				]
 			},
@@ -27,6 +29,7 @@
 			"ubus": {
 				"tailscale": [
 					"run_install",
+					"run_luci_update",
 					"run_uninstall",
 					"set_up_settings",
 					"apply_up_settings",

@@ -1,5 +1,5 @@
 #!/bin/sh
-# 非交互安装：先检测网络，再按直连 / 镜像顺序下载。
+# 非交互安装：轻量网络检测，依次尝试镜像 / 直连下载。
 
 set -e
 
@@ -13,6 +13,7 @@ ensure_arch || exit 1
 log_info "▶  开始安装 Tailscale（版本: ${VERSION:-latest}）"
 log_info "▶  系统架构: $(uname -m) → ${ARCH:-检测中...}"
 
+QUICK_NET_CHECK=1
 if ! diagnose_download_network; then
 	exit 1
 fi
@@ -57,21 +58,22 @@ EOF
 
 installed=0
 
-if [ "$NET_GITHUB_OK" = "1" ] && do_install true; then
-	log_info "✅  GitHub 直连安装成功"
-	installed=1
-elif [ "$NET_MIRROR_OK" = "1" ] && do_install false; then
+# 预检失败时仍会尝试下载；弱网环境优先镜像
+if do_install false; then
 	log_info "✅  镜像模式安装成功"
+	installed=1
+elif do_install true; then
+	log_info "✅  GitHub 直连安装成功"
 	installed=1
 fi
 
 if [ "$installed" != "1" ]; then
 	log_error "❌  安装失败"
-	log_error "❌  网络检测已通过但下载失败，请检查 /etc/tailscale/proxy.env 或 proxies.txt"
+	log_error "❌  请检查: /etc/tailscale/proxy.env、proxies.txt，或在 release.conf 设置 DEFAULT_RELEASE_VERSION=vX.Y.Z"
 	exit 1
 fi
 
-log_info "▶  配置 init 服务与 cron..."
+log_info "▶  配置 init 服务..."
 export TS_SKIP_APPLY_UP=1
 "$CONFIG_DIR/setup_service.sh"
 "$CONFIG_DIR/luci-setup-cron.sh" "$AUTO_UPDATE"

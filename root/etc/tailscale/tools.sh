@@ -12,6 +12,7 @@ VALID_MIRRORS="$CONFIG_DIR/valid_proxies.txt"
 TMP_VALID_MIRRORS="/tmp/valid_mirrors.tmp"
 REMOTE_SCRIPTS_VERSION_FILE="$CONFIG_DIR/remote_ts_scripts_version"
 TIME_OUT=30
+DOWNLOAD_TIME_OUT=180
 
 # 默认 Release 仓库；请修改 /etc/tailscale/release.conf
 GITHUB_RELEASE_REPO="YOUR_GITHUB_USER/luci-app-tailscale"
@@ -33,8 +34,8 @@ load_proxy_env() {
 load_proxy_env
 
 # 网络探测超时（秒），短于正式下载
-NET_PROBE_TIMEOUT=8
-NET_PROBE_MAX_MIRRORS=0
+NET_PROBE_TIMEOUT=6
+NET_PROBE_MAX_MIRRORS=2
 
 # 兼容无 coreutils timeout 的 OpenWrt
 run_curl() {

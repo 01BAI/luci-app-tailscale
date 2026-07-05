@@ -48,6 +48,9 @@ CONF
 fi
 
 chmod +x /etc/tailscale/*.sh 2>/dev/null || true
+if [ -x /etc/tailscale/setup_service.sh ]; then
+	TS_REGEN_ONLY=1 /etc/tailscale/setup_service.sh || true
+fi
 rm -rf /tmp/luci-*cache* 2>/dev/null || true
 /etc/init.d/rpcd restart
 sleep 1

@@ -6,7 +6,8 @@
 'require dom';
 
 /* 热部署后改此版本号，强制浏览器刷新 CSS/JS */
-const UI_REV = '1.0.0';
+const UI_REV = '1.0.1';
+const CSS_REV = '20260705-6';
 
 const SETTINGS_FIELDS = [
 	['accept_routes', '接受路由', '--accept-routes', '', 'flag'],
@@ -30,7 +31,9 @@ const callRunInstall = rpc.declare({ object: 'tailscale', method: 'run_install',
 const callGetInstallProgress = rpc.declare({ object: 'tailscale', method: 'get_install_progress' });
 const callCheckDownloadNetwork = rpc.declare({ object: 'tailscale', method: 'check_download_network' });
 const callRunUninstall = rpc.declare({ object: 'tailscale', method: 'run_uninstall' });
-const callCheckUpdate = rpc.declare({ object: 'tailscale', method: 'check_update' });
+const callCheckUpdates = rpc.declare({ object: 'tailscale', method: 'check_updates', timeout: 45 });
+const callRunLuciUpdate = rpc.declare({ object: 'tailscale', method: 'run_luci_update', params: [ 'tag' ] });
+const callGetLuciUpdateProgress = rpc.declare({ object: 'tailscale', method: 'get_luci_update_progress' });
 const callGetUpSettings = rpc.declare({ object: 'tailscale', method: 'get_up_settings' });
 const callSetUpSettings = rpc.declare({ object: 'tailscale', method: 'set_up_settings', params: [ 'data' ] });
 const callPreviewUpCommand = rpc.declare({ object: 'tailscale', method: 'preview_up_command', params: [ 'data' ] });
@@ -281,21 +284,22 @@ function extractPeerPath(peer) {
 	if (!online)
 		return '';
 
+	const active = peer.active === true || peer.active === 1 || peer.Active === true;
+	if (!active)
+		return '';
+
 	const cur = peer.CurAddr || peer.cur_addr || peer.curAddr || '';
 	const relay = peer.Relay || peer.relay || '';
 	const peerRelay = peer.PeerRelay || peer.peer_relay || peer.peerRelay || '';
-	const active = peer.active === true || peer.active === 1 || peer.Active === true;
 	const tx = Number(peer.TxBytes || peer.tx_bytes || peer.tx || 0);
 	const rx = Number(peer.RxBytes || peer.rx_bytes || peer.rx || 0);
 
 	if (peerRelay)
-		return 'peer_relay|' + peerRelay;
+		return 'peer_relay#' + peerRelay;
 	if (cur)
-		return 'direct|' + cur;
+		return 'direct#' + cur;
 	if (active && relay)
-		return 'relay|' + relay;
-	if (tx > 0 || rx > 0)
-		return 'direct|';
+		return 'relay#' + relay;
 	return 'none';
 }
 
@@ -309,23 +313,23 @@ function formatConnectionCell(p) {
 	if (p.self)
 		return E('span', { class: 'label' }, '本机');
 
-	if (!p.online && !p.active)
+	if (!peerIsConnected(p))
 		return '-';
 
 	const path = p.path || 'none';
 	if (path === 'none' || path === '')
 		return E('span', { class: 'ts-hint' }, '未建立');
 
-	const bar = path.indexOf('|');
+	const bar = path.indexOf('#');
 	const kind = bar >= 0 ? path.slice(0, bar) : path;
 	const detail = bar >= 0 ? path.slice(bar + 1) : '';
 	const hint = formatPathDetail(detail);
 
 	if (kind === 'direct') {
-		return E('span', {}, [
-			E('span', { class: 'label success' }, '直连'),
-			hint ? E('span', { class: 'ts-hint ts-peer-path-detail' }, ' ' + hint) : ''
-		]);
+		const attrs = { class: 'ts-path-direct-wrap' };
+		if (hint)
+			attrs['data-detail'] = hint;
+		return E('span', attrs, E('span', { class: 'label success' }, '直连'));
 	}
 	if (kind === 'relay') {
 		return E('span', {}, [
@@ -354,6 +358,73 @@ function extractSubnetRoutes(peer) {
 	return routes.length ? routes.join(', ') : '';
 }
 
+function isZeroTailscaleTime(iso) {
+	if (!iso)
+		return true;
+	return String(iso).indexOf('0001-01-01') === 0;
+}
+
+function parsePeerTime(iso) {
+	if (isZeroTailscaleTime(iso))
+		return NaN;
+	const t = Date.parse(iso);
+	return isNaN(t) ? NaN : t;
+}
+
+function peerIsConnected(p) {
+	if (p.self)
+		return true;
+	return p.online === true || p.online === 1;
+}
+
+function formatRelativeAgo(iso) {
+	if (!iso)
+		return '';
+	const t = Date.parse(iso);
+	if (isNaN(t))
+		return '';
+	const sec = Math.max(0, Math.floor((Date.now() - t) / 1000));
+	if (sec < 60)
+		return '刚刚';
+	const min = Math.floor(sec / 60);
+	if (min < 60)
+		return min + ' 分钟';
+	const hr = Math.floor(min / 60);
+	if (hr < 24)
+		return hr + ' 小时';
+	return Math.floor(hr / 24) + ' 天';
+}
+
+function formatPeerLastSeen(p) {
+	if (!isZeroTailscaleTime(p.lastseen)) {
+		const t = parsePeerTime(p.lastseen);
+		if (!isNaN(t)) {
+			const d = new Date(t);
+			const hh = String(d.getHours()).padStart(2, '0');
+			const mm = String(d.getMinutes()).padStart(2, '0');
+			return hh + ':' + mm;
+		}
+	}
+	const hint = p.status_hint || '';
+	const m = hint.match(/last seen (.+)$/i);
+	if (m)
+		return m[1];
+	return '';
+}
+
+function formatPeerStatus(p) {
+	if (peerIsConnected(p))
+		return '在线';
+	const when = formatPeerLastSeen(p);
+	return when ? ('离线，' + when) : '离线';
+}
+
+function peerStatusLabel(p) {
+	if (peerIsConnected(p))
+		return E('span', { class: 'label success' }, formatPeerStatus(p));
+	return E('span', { class: 'label' }, formatPeerStatus(p));
+}
+
 function normalizePeers(peers) {
 	if (!peers)
 		return [];
@@ -366,6 +437,9 @@ function normalizePeers(peers) {
 				online: p.online === true || p.online === 1,
 				active: p.active === true || p.active === 1,
 				lastseen: p.lastseen || '',
+				lasthandshake: p.lasthandshake || '',
+				lastwrite: p.lastwrite || '',
+				status_hint: p.status_hint || '',
 				self: p.self === true || p.self === 1,
 				routes: extractSubnetRoutes(p) || (p.routes ? String(p.routes).replace(/,/g, ', ') : ''),
 				path: p.self ? '' : (p.path || extractPeerPath(p))
@@ -389,39 +463,14 @@ function normalizePeers(peers) {
 			online: p.online === true || p.online === 1 || p.Online === true,
 			active: p.active === true || p.active === 1 || p.Active === true,
 			lastseen: p.lastseen || p.LastSeen || '',
+			lasthandshake: p.lasthandshake || p.LastHandshake || '',
+			lastwrite: p.lastwrite || p.LastWrite || '',
+			status_hint: p.status_hint || '',
 			self: p.self === true || p.self === 1,
 			routes: routes,
 			path: (p.self === true || p.self === 1) ? '' : extractPeerPath(p)
 		};
 	});
-}
-
-function formatRelativeAgo(iso) {
-	if (!iso)
-		return '';
-	const t = Date.parse(iso);
-	if (isNaN(t))
-		return '';
-	const sec = Math.max(0, Math.floor((Date.now() - t) / 1000));
-	if (sec < 60)
-		return '刚刚';
-	const min = Math.floor(sec / 60);
-	if (min < 60)
-		return min + ' 分钟';
-	const hr = Math.floor(min / 60);
-	if (hr < 24)
-		return hr + ' 小时';
-	return Math.floor(hr / 24) + ' 天';
-}
-
-function formatPeerStatus(p) {
-	if (p.online || p.active)
-		return '在线';
-	if (p.lastseen) {
-		const ago = formatRelativeAgo(p.lastseen);
-		return ago ? ('离线，' + ago + '前活跃') : '离线';
-	}
-	return '离线';
 }
 
 function peersTable(peers) {
@@ -440,9 +489,7 @@ function peersTable(peers) {
 			E('td', { class: 'td' }, p.os || '-'),
 			E('td', { class: 'td ts-peer-routes' }, p.routes || '-'),
 			E('td', { class: 'td ts-peer-path' }, formatConnectionCell(p)),
-			E('td', { class: 'td' }, (p.online || p.active)
-				? E('span', { class: 'label success' }, formatPeerStatus(p))
-				: E('span', { class: 'label' }, formatPeerStatus(p)))
+			E('td', { class: 'td' }, peerStatusLabel(p))
 		]))
 	]);
 }
@@ -516,6 +563,14 @@ function buildTailnetAction(installed, canConnect, isLoggedIn, statusReadFailed)
 	}, '登出');
 }
 
+function overviewNeedsPoll(overview, status, installed) {
+	if (!installed || !isServiceEnabled(overview))
+		return false;
+	if (!overview.running)
+		return true;
+	return connectionNeedsPoll(overview, status, installed);
+}
+
 function connectionNeedsPoll(overview, status, installed) {
 	if (!installed || !overview.enabled || !overview.running)
 		return false;
@@ -586,7 +641,7 @@ function manageConnectionPolling(self, overview, status, installed) {
 	const canConnect = installed && overview.enabled && overview.running;
 	const isLoggedIn = isLoggedInStatus(status);
 
-	if (connectionNeedsPoll(overview, status, installed)) {
+	if (overviewNeedsPoll(overview, status, installed)) {
 		poll.add(self._refreshConnection, CONNECTION_POLL_INTERVAL);
 	} else if (canConnect && isLoggedIn) {
 		self._peerPollActive = true;
@@ -612,6 +667,107 @@ function updateRuntimeSection(self, overview, status, installed) {
 		dom.content(statusEl, runtimeLabel(installed, overview, status));
 	if (actionEl)
 		dom.content(actionEl, installed ? buildRuntimeToggleButton(self, overview) : '');
+}
+
+function formatReleaseVersion(tagOrVer) {
+	if (!tagOrVer)
+		return '';
+	const s = String(tagOrVer);
+	if (s.indexOf('luci-v') === 0)
+		return 'v' + s.slice(6);
+	if (s.charAt(0) === 'v')
+		return s;
+	return 'v' + s;
+}
+
+function buildNewVersionButton(version, clickFn) {
+	return E('button', {
+		class: 'btn cbi-button-apply important ts-new-version-btn',
+		click: clickFn
+	}, '发现新版本 ' + formatReleaseVersion(version) + '，点击更新');
+}
+
+function applyVersionUpdateHints(self, res, installed) {
+	if (!res)
+		return;
+
+	const luciSlot = document.querySelector('.tailscale-overview [data-ts-luci-update="1"]');
+	const tsSlot = document.querySelector('.tailscale-overview [data-ts-tailscale-update="1"]');
+
+	if (res.plugin && (res.plugin.has_update === 1 || res.plugin.has_update === true) && luciSlot) {
+		const tag = res.plugin.latest_tag || res.plugin.latest;
+		dom.content(luciSlot, buildNewVersionButton(tag, ui.createHandlerFn(self, function() {
+			return runLuciAppUpdate(tag);
+		})));
+	}
+
+	if (installed && res.tailscale && (res.tailscale.has_update === 1 || res.tailscale.has_update === true) && tsSlot) {
+		dom.content(tsSlot, buildNewVersionButton(res.tailscale.latest, ui.createHandlerFn(self, function() {
+			return runTailscaleInstall(res.tailscale.latest, false);
+		})));
+	}
+}
+
+function runLuciAppUpdate(tag) {
+	let pollTimer = null;
+	let pollAttempts = 0;
+	let finishedSuccess = false;
+	const statusEl = E('p', { class: 'spinning' }, '正在启动插件更新...');
+	const logEl = E('pre', { class: 'ts-install-log' }, '');
+	const closeBtn = E('button', {
+		class: 'btn cbi-button-action important',
+		style: 'display:none; margin-top:0.75rem;',
+		click: function(ev) {
+			ev.preventDefault();
+			if (pollTimer)
+				clearInterval(pollTimer);
+			ui.hideModal();
+			if (finishedSuccess)
+				location.reload();
+		}
+	}, '关闭');
+
+	ui.showModal('更新插件', [ statusEl, logEl, closeBtn ]);
+
+	function finishUpdate(success) {
+		if (pollTimer) {
+			clearInterval(pollTimer);
+			pollTimer = null;
+		}
+		statusEl.className = success ? 'label success' : 'alert-message error';
+		finishedSuccess = success;
+		statusEl.textContent = success ? '插件更新完成' : '插件更新失败';
+		closeBtn.textContent = success ? '关闭并刷新页面' : '关闭';
+		closeBtn.style.display = '';
+	}
+
+	function pollProgress() {
+		pollAttempts++;
+		return callGetLuciUpdateProgress().then(function(p) {
+			logEl.textContent = p.log || '';
+			logEl.scrollTop = logEl.scrollHeight;
+			if (p.running) {
+				statusEl.className = 'spinning';
+				statusEl.textContent = '正在更新插件，请稍候...';
+				return;
+			}
+			if (p.done)
+				finishUpdate(!!p.success);
+		});
+	}
+
+	return callRunLuciUpdate({ tag: tag }).then(function(res) {
+		if (!res || res.success === false)
+			throw new Error((res && res.message) || '无法启动更新');
+		pollTimer = setInterval(pollProgress, INSTALL_POLL_INTERVAL);
+		return pollProgress();
+	}).catch(function(err) {
+		if (pollTimer)
+			clearInterval(pollTimer);
+		ui.hideModal();
+		ui.addNotification(null, E('p', { class: 'alert-message error' },
+			(err && err.message) || '插件更新失败'));
+	});
 }
 
 function formatNetworkCheckError(net) {
@@ -845,7 +1001,6 @@ return view.extend({
 		const installed = !rpcFailed && !!overview.installed;
 
 		const settingsRoot = E('div', { id: 'tailscale-up-settings' });
-		let pendingLatest = null;
 		const self = this;
 
 		self._liveOverview = overview;
@@ -871,7 +1026,7 @@ return view.extend({
 				updateRuntimeSection(self, self._liveOverview, self._liveStatus, inst);
 				updateConnectionSection(self._liveOverview, self._liveStatus, inst);
 
-				if (!connectionNeedsPoll(self._liveOverview, self._liveStatus, inst)) {
+				if (!overviewNeedsPoll(self._liveOverview, self._liveStatus, inst)) {
 					poll.remove(self._refreshConnection);
 					const canConnect = inst && self._liveOverview.enabled && self._liveOverview.running;
 					const isLoggedIn = isLoggedInStatus(self._liveStatus);
@@ -898,14 +1053,16 @@ return view.extend({
 			return callSetServiceEnabled(enabling).then(function(res) {
 				if (res && res.success === false)
 					throw new Error(res.message || '操作失败');
-				if (res && res.message)
-					ui.addNotification(null, E('p', {}, res.message));
+				self._liveOverview = Object.assign({}, self._liveOverview || ov, {
+					enabled: enabling,
+					running: res && res.running === true
+				});
 				return Promise.all([
 					rpcCall(callGetOverview(), {}),
 					rpcCall(callGetStatus(), {})
 				]);
 			}).then(function(res) {
-				self._liveOverview = res[0] || {};
+				self._liveOverview = res[0] || self._liveOverview || {};
 				self._liveStatus = res[1] || {};
 				const inst = !!self._liveOverview.installed;
 				updateRuntimeSection(self, self._liveOverview, self._liveStatus, inst);
@@ -937,13 +1094,14 @@ return view.extend({
 		}
 
 		/* 1. 版本信息 — 3 列 */
-		const hintEl = E('span', { class: 'ts-hint' });
 		const luciVer = overview.luci_version || UI_REV;
+		const luciUpdateSlot = E('span', { 'data-ts-luci-update': '1' });
+		const tsUpdateSlot = E('span', { 'data-ts-tailscale-update': '1' });
 		let versionRows;
 
 		if (!installed) {
 			versionRows = [
-				['LuCI 插件', luciVer, ''],
+				['插件版本', luciVer, luciUpdateSlot],
 				['Tailscale', E('button', {
 					class: 'btn cbi-button-apply important',
 					click: ui.createHandlerFn(self, function() {
@@ -952,42 +1110,10 @@ return view.extend({
 				}, '安装 Tailscale'), '']
 			];
 		} else {
-			const actionBtn = E('button', { class: 'btn cbi-button-action' }, '检测更新');
-			actionBtn.addEventListener('click', function(ev) {
-				ev.preventDefault();
-				if (pendingLatest) {
-					doInstallOrUpdate(pendingLatest);
-					return;
-				}
-				actionBtn.disabled = true;
-				actionBtn.textContent = '检测中...';
-				hintEl.textContent = '';
-				callCheckUpdate().then(res => {
-					actionBtn.disabled = false;
-					if (!res.success) {
-						hintEl.textContent = res.message || '检测失败';
-						actionBtn.textContent = '检测更新';
-						return;
-					}
-					hintEl.textContent = res.message || '';
-					if (res.has_update) {
-						pendingLatest = res.latest;
-						actionBtn.textContent = '更新';
-						actionBtn.className = 'btn cbi-button-apply important';
-					} else {
-						pendingLatest = null;
-						actionBtn.textContent = '检测更新';
-						actionBtn.className = 'btn cbi-button-action';
-					}
-				});
-			});
 			versionRows = [
-				['LuCI 插件', luciVer, ''],
-				['Tailscale', E('span', {}, [
-					E('span', {}, overview.version || status.version || '-'),
-					hintEl
-				]), [
-					actionBtn,
+				['插件版本', luciVer, luciUpdateSlot],
+				['Tailscale', E('span', {}, overview.version || status.version || '-'), [
+					tsUpdateSlot,
 					E('button', {
 						class: 'btn cbi-button-negative',
 						click: ui.createHandlerFn(self, function() {
@@ -1084,12 +1210,20 @@ return view.extend({
 		}
 
 		const modules = [
-			E('link', { rel: 'stylesheet', href: L.resource('view/tailscale/overview.css') + '?v=' + UI_REV }),
+			E('link', { rel: 'stylesheet', href: L.resource('view/tailscale/overview.css') + '?v=' + CSS_REV }),
 			versionModule,
 			runtimeModule,
 			connectionModule,
 			settingsModule
 		];
+
+		if (!rpcFailed) {
+			setTimeout(function() {
+				rpcCall(callCheckUpdates(), {}).then(function(res) {
+					applyVersionUpdateHints(self, res, installed);
+				});
+			}, 0);
+		}
 
 		return E('div', { class: 'tailscale-overview' }, modules);
 	},

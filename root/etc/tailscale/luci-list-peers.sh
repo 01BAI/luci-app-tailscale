@@ -1,13 +1,59 @@
 #!/bin/sh
-# 从 tailscale status --json 提取节点列表（与 tailscale status 表格字段对齐）
-# 用法: luci-list-peers.sh [status.json]
-# 输出 TSV（| 分隔）: id|name|ip|os|online|active|lastseen|self|routes|path
+# 从 tailscale status --json 提取节点列表（与 tailscale status CLI 对齐）
+# 输出 TSV（| 分隔）: id|name|ip|os|online|active|lastseen|self|routes|path|lasthandshake|lastwrite|status_hint
 
 JSON="${1:-/tmp/tailscale_luci_status.json}"
 JF="$(command -v jsonfilter)"
+CLI_FILE="/tmp/.ts_cli_status.$$"
 
 [ -f "$JSON" ] || exit 1
 [ -n "$JF" ] || exit 1
+
+tailscale status 2>/dev/null > "$CLI_FILE" || : > "$CLI_FILE"
+trap 'rm -f "$CLI_FILE" /tmp/.ts_peer_*' EXIT INT TERM
+
+is_zero_time() {
+	case "$1" in
+		''|null|"0001-01-01"*) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+cli_status_for_ip() {
+	_ip="$1"
+	_line=$(grep -E "^${_ip}[[:space:]]" "$CLI_FILE" | head -n1)
+	[ -z "$_line" ] && return 0
+	echo "$_line" | awk '{
+		out = ""
+		for (i = 5; i <= NF; i++) {
+			if (out != "") out = out " "
+			out = out $i
+		}
+		print out
+	}'
+}
+
+# 与 tailscale status / 控制面板一致：
+# - CLI 含 offline → 离线
+# - JSON Online=false 或 LastSeen 为真实时间 → 离线
+# - Online=true 且 LastSeen 为零时间 → Connected（在线）
+peer_is_connected() {
+	_online="$1"
+	_lastseen="$2"
+	_cli="$3"
+
+	echo "$_cli" | grep -qi "offline" && return 1
+
+	case "$_online" in
+		false|False|0) return 1 ;;
+	esac
+
+	if is_zero_time "$_lastseen"; then
+		return 0
+	fi
+
+	return 1
+}
 
 dns_short() {
 	[ -n "$1" ] || return
@@ -28,17 +74,16 @@ routes_from_json_array() {
 
 format_path() {
 	is_self="$1"
-	online="$2"
+	connected="$2"
 	active="$3"
 	cur="$4"
 	relay="$5"
 	peer_relay="$6"
-	tx="$7"
-	rx="$8"
 
 	[ "$is_self" = "true" ] && return 0
+	[ "$connected" = "true" ] || return 0
 
-	case "$online" in
+	case "$active" in
 		true|True|1) ;;
 		*) return 0 ;;
 	esac
@@ -46,31 +91,17 @@ format_path() {
 	cur=$(echo "$cur" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/\\//g')
 	relay=$(echo "$relay" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
 	peer_relay=$(echo "$peer_relay" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/\\//g')
-	tx=$(echo "$tx" | sed 's/[^0-9-]//g')
-	rx=$(echo "$rx" | sed 's/[^0-9-]//g')
-	[ -z "$tx" ] && tx=0
-	[ -z "$rx" ] && rx=0
 
 	if [ -n "$peer_relay" ]; then
-		printf 'peer_relay|%s\n' "$peer_relay"
+		printf 'peer_relay#%s\n' "$peer_relay"
 		return 0
 	fi
 	if [ -n "$cur" ]; then
-		printf 'direct|%s\n' "$cur"
+		printf 'direct#%s\n' "$cur"
 		return 0
 	fi
-	# 与 CLI「active; relay "hkg"」一致：仅活跃且走 DERP 时才算中继
-	case "$active" in
-		true|True|1)
-			if [ -n "$relay" ]; then
-				printf 'relay|%s\n' "$relay"
-				return 0
-			fi
-			;;
-	esac
-	# idle 直连（有流量统计但 JSON 未填 CurAddr）
-	if [ "$tx" -gt 0 ] 2>/dev/null || [ "$rx" -gt 0 ] 2>/dev/null; then
-		printf 'direct|\n'
+	if [ -n "$relay" ]; then
+		printf 'relay#%s\n' "$relay"
 		return 0
 	fi
 	printf 'none\n'
@@ -87,11 +118,18 @@ print_row() {
 	is_self="$8"
 	routes="$9"
 	path="${10}"
+	lasthandshake="${11}"
+	lastwrite="${12}"
+	status_hint="${13}"
 	[ -z "$lastseen" ] && lastseen=""
 	[ -z "$routes" ] && routes=""
 	[ -z "$path" ] && path=""
-	printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
-		"$id" "$name" "$ip" "$os" "$online" "$active" "$lastseen" "$is_self" "$routes" "$path"
+	[ -z "$lasthandshake" ] && lasthandshake=""
+	[ -z "$lastwrite" ] && lastwrite=""
+	[ -z "$status_hint" ] && status_hint=""
+	printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+		"$id" "$name" "$ip" "$os" "$online" "$active" "$lastseen" "$is_self" "$routes" "$path" \
+		"$lasthandshake" "$lastwrite" "$status_hint"
 }
 
 self_id="$($JF -i "$JSON" -e '@.Self.ID' 2>/dev/null)"
@@ -108,7 +146,7 @@ self_routes="$(routes_from_json_array "$self_routes_raw")"
 
 if [ -n "$self_ip" ]; then
 	print_row "$self_id" "$(dns_short "$self_dns")" "$self_ip" "$self_os" \
-		"$self_online" "$self_active" "$self_lastseen" "true" "$self_routes" ""
+		"true" "$self_active" "$self_lastseen" "true" "$self_routes" "" "" "" ""
 fi
 
 $JF -i "$JSON" -e '@.Peer.*.ID' > /tmp/.ts_peer_ids || exit 0
@@ -120,12 +158,12 @@ $JF -i "$JSON" -e '@.Peer.*.OS' > /tmp/.ts_peer_os
 $JF -i "$JSON" -e '@.Peer.*.Online' > /tmp/.ts_peer_online
 $JF -i "$JSON" -e '@.Peer.*.Active' > /tmp/.ts_peer_active
 $JF -i "$JSON" -e '@.Peer.*.LastSeen' > /tmp/.ts_peer_lastseen
+$JF -i "$JSON" -e '@.Peer.*.LastWrite' > /tmp/.ts_peer_lastwrite
+$JF -i "$JSON" -e '@.Peer.*.LastHandshake' > /tmp/.ts_peer_lasths
 $JF -i "$JSON" -e '@.Peer.*.AllowedIPs' > /tmp/.ts_peer_allowedips
 $JF -i "$JSON" -e '@.Peer.*.CurAddr' > /tmp/.ts_peer_curaddr
 $JF -i "$JSON" -e '@.Peer.*.Relay' > /tmp/.ts_peer_relay
 $JF -i "$JSON" -e '@.Peer.*.PeerRelay' > /tmp/.ts_peer_peerrelay
-$JF -i "$JSON" -e '@.Peer.*.TxBytes' > /tmp/.ts_peer_tx
-$JF -i "$JSON" -e '@.Peer.*.RxBytes' > /tmp/.ts_peer_rx
 
 i=0
 while IFS= read -r id; do
@@ -137,19 +175,23 @@ while IFS= read -r id; do
 	online=$(sed -n "${i}p" /tmp/.ts_peer_online)
 	active=$(sed -n "${i}p" /tmp/.ts_peer_active)
 	lastseen=$(sed -n "${i}p" /tmp/.ts_peer_lastseen)
+	lastwrite=$(sed -n "${i}p" /tmp/.ts_peer_lastwrite)
+	lasthandshake=$(sed -n "${i}p" /tmp/.ts_peer_lasths)
 	allowed=$(sed -n "${i}p" /tmp/.ts_peer_allowedips)
 	cur=$(sed -n "${i}p" /tmp/.ts_peer_curaddr)
 	relay=$(sed -n "${i}p" /tmp/.ts_peer_relay)
 	peer_relay=$(sed -n "${i}p" /tmp/.ts_peer_peerrelay)
-	tx=$(sed -n "${i}p" /tmp/.ts_peer_tx)
-	rx=$(sed -n "${i}p" /tmp/.ts_peer_rx)
+	cli_status="$(cli_status_for_ip "$ip")"
 	routes="$(routes_from_json_array "$allowed")"
-	path="$(format_path "false" "$online" "$active" "$cur" "$relay" "$peer_relay" "$tx" "$rx")"
-	print_row "$id" "$(dns_short "$dns")" "$ip" "$os" \
-		"$online" "$active" "$lastseen" "false" "$routes" "$path"
-done < /tmp/.ts_peer_ids
 
-rm -f /tmp/.ts_peer_ids /tmp/.ts_peer_dns /tmp/.ts_peer_ips /tmp/.ts_peer_os \
-	/tmp/.ts_peer_online /tmp/.ts_peer_active /tmp/.ts_peer_lastseen /tmp/.ts_peer_allowedips \
-	/tmp/.ts_peer_curaddr /tmp/.ts_peer_relay /tmp/.ts_peer_peerrelay \
-	/tmp/.ts_peer_tx /tmp/.ts_peer_rx
+	if peer_is_connected "$online" "$lastseen" "$cli_status"; then
+		display_online="true"
+	else
+		display_online="false"
+	fi
+
+	path="$(format_path "false" "$display_online" "$active" "$cur" "$relay" "$peer_relay")"
+	print_row "$id" "$(dns_short "$dns")" "$ip" "$os" \
+		"$display_online" "$active" "$lastseen" "false" "$routes" "$path" \
+		"$lasthandshake" "$lastwrite" "$cli_status"
+done < /tmp/.ts_peer_ids

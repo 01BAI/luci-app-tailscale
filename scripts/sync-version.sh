@@ -21,4 +21,13 @@ if [ -f "$OVERVIEW_JS" ]; then
 	fi
 fi
 
-echo "已同步 LuCI 插件版本: ${VER}"
+INSTALL_SH="$ROOT_DIR/scripts/install-luci-app.sh"
+if [ -f "$INSTALL_SH" ]; then
+	if sed --version >/dev/null 2>&1; then
+		sed -i "s/^TAG=\"luci-v[^\"]*\"/TAG=\"luci-v${VER}\"/" "$INSTALL_SH"
+	else
+		sed -i '' "s/^TAG=\"luci-v[^\"]*\"/TAG=\"luci-v${VER}\"/" "$INSTALL_SH"
+	fi
+fi
+
+echo "已同步 LuCI 插件版本: ${VER}（install-luci-app.sh → luci-v${VER}）"
