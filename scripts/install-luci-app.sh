@@ -18,10 +18,10 @@ TAG="luci-latest"
 PKG_NAME="luci-app-tailscale"
 TMP_DIR="/tmp/luci-app-tailscale-install.$$"
 
-log() { echo "[install-luci-app] $*"; }
+log() { echo "[install-luci-app] $*" >&2; }
 die() { log "ERROR: $*"; exit 1; }
 
-SCRIPT_REV="2026.07.05-4"
+SCRIPT_REV="2026.07.05-5"
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -136,10 +136,40 @@ BUILTIN_API_MIRRORS="https://ghfast.top/ https://ghproxy.net/ https://gh-proxy.c
 curl_fetch() {
 	local url="$1"
 	local out="$2"
-	curl -fsSL --connect-timeout 20 --max-time 90 \
+	curl -fsSL --globoff --connect-timeout 20 --max-time 90 \
 		-A "luci-app-tailscale-install/${SCRIPT_REV}" \
 		-H "Accept: application/vnd.github+json" \
-		"$url" -o "$out"
+		"$url" -o "$out" 2>/dev/null
+}
+
+url_looks_valid() {
+	case "$1" in
+		http://*|https://*) return 0 ;;
+	esac
+	return 1
+}
+
+# 正式版 tag luci-v1.0.0 → 尝试已知 ipk 命名，无需 GitHub API
+try_direct_tag_ipk_urls() {
+	local mirror_prefix="${1:-}"
+	local ver r path url
+
+	case "$TAG" in
+		luci-v*) ver="${TAG#luci-v}" ;;
+		*) return 1 ;;
+	esac
+
+	for r in 1 2 3 4 5; do
+		path="${REPO}/releases/download/${TAG}/luci-app-tailscale_${ver}-r${r}_all.ipk"
+		url="${mirror_prefix}https://github.com/${path}"
+		if curl -fsSL --globoff --connect-timeout 15 --max-time 30 \
+			-A "luci-app-tailscale-install/${SCRIPT_REV}" \
+			-r 0-0 "$url" -o /dev/null 2>/dev/null; then
+			echo "$url"
+			return 0
+		fi
+	done
+	return 1
 }
 
 fetch_release_json() {
@@ -208,7 +238,7 @@ scrape_ipk_url_from_release_page() {
 	page="${mirror_prefix}https://github.com/${REPO}/releases/expanded_assets/${TAG}"
 	html="$TMP_DIR/release_page.html"
 
-	curl -fsSL --connect-timeout 20 --max-time 90 \
+	curl -fsSL --globoff --connect-timeout 20 --max-time 90 \
 		-A "luci-app-tailscale-install/${SCRIPT_REV}" \
 		"$page" -o "$html" 2>/dev/null || return 1
 
@@ -224,34 +254,62 @@ scrape_ipk_url_from_release_page() {
 }
 
 resolve_main_ipk_url() {
-	local url=""
+	local url="" mirror
 
+	# 1. 正式版 tag：直连 github.com 下载（不走 API，避免 403 限流）
+	url=$(try_direct_tag_ipk_urls "" || true)
+	if url_looks_valid "$url"; then
+		log "使用 Release 直链: $(basename "$url")"
+		echo "$url"
+		return 0
+	fi
+
+	# 2. GitHub API（含镜像）
 	if fetch_release_json; then
 		url=$(extract_latest_asset "luci-app-tailscale_" || true)
 	fi
+	if url_looks_valid "$url"; then
+		echo "$url"
+		return 0
+	fi
 
+	# 3. Release 页面解析
 	if [ -z "$url" ]; then
 		log "WARN: API 不可用，尝试 GitHub Release 页面解析 ipk..."
 		url=$(scrape_ipk_url_from_release_page "" || true)
 	fi
-
-	if [ -z "$url" ]; then
-		for mirror in $BUILTIN_API_MIRRORS; do
-			log "尝试 Release 页面镜像: ${mirror}https://github.com/..."
-			url=$(scrape_ipk_url_from_release_page "$mirror" || true)
-			[ -n "$url" ] && break
-		done
+	if url_looks_valid "$url"; then
+		echo "$url"
+		return 0
 	fi
 
-	[ -n "$url" ] || die "无法获取 Release / ipk 下载地址，请检查 --repo / --tag 或网络"
-	echo "$url"
+	# 4. 镜像：直链 → 页面
+	for mirror in $BUILTIN_API_MIRRORS; do
+		url=$(try_direct_tag_ipk_urls "$mirror" || true)
+		if url_looks_valid "$url"; then
+			log "使用镜像直链: $(basename "$url")"
+			echo "$url"
+			return 0
+		fi
+		log "尝试 Release 页面镜像: ${mirror}https://github.com/..."
+		url=$(scrape_ipk_url_from_release_page "$mirror" || true)
+		if url_looks_valid "$url"; then
+			echo "$url"
+			return 0
+		fi
+	done
+
+	die "无法获取 Release / ipk 下载地址，请检查 --repo / --tag 或网络"
 }
 
 MAIN_URL=$(resolve_main_ipk_url)
+url_looks_valid "$MAIN_URL" || die "解析到的下载地址无效"
 
 MAIN_IPK="$TMP_DIR/$(basename "$MAIN_URL")"
 log "下载: $(basename "$MAIN_IPK") ..."
-curl -fsSL --connect-timeout 60 -A "luci-app-tailscale-install" "$MAIN_URL" -o "$MAIN_IPK" \
+curl -fsSL --globoff --connect-timeout 60 --max-time 300 \
+	-A "luci-app-tailscale-install/${SCRIPT_REV}" \
+	"$MAIN_URL" -o "$MAIN_IPK" \
 	|| die "主包下载失败"
 
 # ---------- 安装 / 覆盖 ipk ----------
