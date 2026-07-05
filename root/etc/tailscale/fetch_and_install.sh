@@ -33,8 +33,11 @@ parse_first_binary_tag_from_list_json() {
 	local version=""
 
 	if command -v jq >/dev/null 2>&1; then
-		version=$(jq -r '[.[] | .tag_name | select(test("^v[0-9]"))] | .[0] // empty' "$json_file" 2>/dev/null)
-	else
+		# OpenWrt jq 常无 ONIGURUMA，不可用 test()/match()，用 startswith + tonumber 判断 v[0-9]*
+		version=$(jq -r '[.[] | .tag_name | select(startswith("v")) | select(.[1:2] | try tonumber catch null != null)] | .[0] // empty' "$json_file" 2>/dev/null)
+	fi
+
+	if ! is_tailscale_binary_tag "$version"; then
 		version=$(grep -o '"tag_name"[ ]*:[ ]*"v[0-9][^"]*"' "$json_file" \
 			| head -n1 \
 			| sed 's/.*"tag_name"[ ]*:[ ]*"\([^"]*\)".*/\1/')
