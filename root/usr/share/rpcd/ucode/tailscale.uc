@@ -10,9 +10,13 @@ const uci = cursor();
 const INSTALL_CONF = '/etc/tailscale/install.conf';
 const UP_CONF = '/etc/tailscale/tailscale_up.conf';
 const VERSION_FILE = '/etc/tailscale/current_version';
+const LUCID_APP_VERSION_FILE = '/etc/tailscale/luci-app.version';
 const LUCID_INSTALL = '/etc/tailscale/luci-install.sh';
 const LUCID_INSTALL_BG = '/etc/tailscale/luci-install-bg.sh';
+const CHECK_NETWORK = '/etc/tailscale/check_network.sh';
 const LUCID_LOGIN = '/etc/tailscale/luci-login.sh';
+const LUCID_APPLY_UP = '/etc/tailscale/luci-apply-up.sh';
+const APPLY_LOG = '/tmp/tailscale_luci_apply.log';
 const LUCID_UNINSTALL = '/etc/tailscale/luci-uninstall.sh';
 const LUCID_LIST_PEERS = '/etc/tailscale/luci-list-peers.sh';
 const STATUS_JSON_TMP = '/tmp/tailscale_luci_status.json';
@@ -83,6 +87,11 @@ const UP_UI_FLAGS = {
 	ssh: true
 };
 
+const UP_UI_DEFAULTS = {
+	accept_routes: 'true',
+	netfilter_mode: 'nodivert'
+};
+
 function is_up_ui_key(name) {
 	for (let i = 0; i < length(UP_UI_KEYS); i++)
 		if (UP_UI_KEYS[i] == name)
@@ -103,6 +112,15 @@ function setting_true(val) {
 	return val == true || val == 1 || val == '1' || val == 'true';
 }
 
+function valid_exit_node(val) {
+	val = trim('' + (val ?? ''));
+	if (!length(val))
+		return false;
+	if (match(val, /^[0-9]+$/))
+		return false;
+	return true;
+}
+
 function finalize_ui_settings(settings) {
 	let out = {};
 	if (settings == null)
@@ -112,12 +130,16 @@ function finalize_ui_settings(settings) {
 		let name = UP_UI_KEYS[i];
 		let val = settings[name];
 
-		if (UP_UI_FLAGS[name])
+		if (UP_UI_FLAGS[name]) {
+			if (val == null || val === '' || val === false)
+				val = UP_UI_DEFAULTS[name];
 			out[name] = setting_true(val) ? 'true' : 'false';
-		else if (name == 'netfilter_mode') {
+		} else if (name == 'netfilter_mode') {
 			val = val != null ? trim('' + val) : '';
-			out[name] = length(val) ? val : 'on';
-		} else
+			out[name] = length(val) ? val : (UP_UI_DEFAULTS.netfilter_mode || 'nodivert');
+		} else if (name == 'exit_node' && !valid_exit_node(val))
+			out[name] = '';
+		else
 			out[name] = (val != null && val != false && val != 0) ? trim('' + val) : '';
 	}
 
@@ -144,6 +166,21 @@ function decode_up_settings_data(raw) {
 	}
 
 	return finalize_ui_settings({});
+}
+
+function extract_up_settings_request(req) {
+	let raw = req?.args?.data;
+
+	if (raw == null && req?.args != null && type(req.args) == 'object') {
+		for (let i = 0; i < length(UP_UI_KEYS); i++) {
+			if (req.args[UP_UI_KEYS[i]] != null) {
+				raw = req.args;
+				break;
+			}
+		}
+	}
+
+	return decode_up_settings_data(raw);
 }
 
 function exec(command) {
@@ -270,6 +307,15 @@ function get_installed_version() {
 	return '';
 }
 
+function get_luci_app_version() {
+	if (access(LUCID_APP_VERSION_FILE)) {
+		let v = trim(readfile(LUCID_APP_VERSION_FILE) || '');
+		if (length(v) > 0)
+			return v;
+	}
+	return '';
+}
+
 function get_latest_release() {
 	let repo = read_release_repo();
 	let bases = [ 'https://api.github.com' ];
@@ -352,6 +398,8 @@ function write_up_settings(partial) {
 		if (is_up_ui_key(name)) {
 			if (typ == 'flag')
 				push(lines, `${cli_key}="${val == 'true' ? 'true' : 'false'}"`);
+			else if (name == 'exit_node' && !valid_exit_node(val))
+				; /* 非法 exit-node（如纯数字）不写入配置，避免 tailscale up 整体失败 */
 			else if (length(val))
 				push(lines, `${cli_key}="${replace(val, '"', '\\"')}"`);
 			continue;
@@ -374,11 +422,11 @@ function write_up_settings(partial) {
 }
 
 function build_up_command(settings, opts) {
-	let cli = tailscale_cli();
-	if (!cli)
+	if (!tailscale_cli())
 		return null;
 
-	let parts = [ cli, 'up' ];
+	/* 与 helper / tailscale_up_generator 一致：tailscale up --key=value，不加引号 */
+	let parts = [ 'tailscale', 'up' ];
 	if (opts?.reset)
 		push(parts, '--reset');
 
@@ -389,17 +437,19 @@ function build_up_command(settings, opts) {
 		let name = def[2];
 		let val = settings[name];
 
+		if (!is_up_ui_key(name))
+			continue;
+
 		if (val == null || val == '')
 			continue;
 
-		if (typ == 'flag') {
-			if (val == 'true' || val == '1' || val == true)
-				push(parts, cli_key);
-			else if (val == 'false' || val == '0' || val == false)
-				push(parts, cli_key + '=false');
-		} else {
-			push(parts, cli_key + '=' + shell_quote(val));
-		}
+		if (name == 'exit_node' && !valid_exit_node(val))
+			continue;
+
+		if (typ == 'flag')
+			push(parts, cli_key + '=' + (setting_true(val) ? 'true' : 'false'));
+		else
+			push(parts, cli_key + '=' + val);
 	}
 
 	return join(' ', parts);
@@ -432,7 +482,7 @@ function build_login_command() {
 	if (!cli)
 		return null;
 
-	let cmd = build_up_command(read_up_settings(), { reset: true });
+	let cmd = build_up_command(finalize_ui_settings(read_up_settings()), { reset: true });
 	if (cmd)
 		return cmd;
 
@@ -448,7 +498,40 @@ function wait_tailscaled_ready() {
 	return false;
 }
 
-function apply_saved_up() {
+function run_up_from_conf() {
+	if (!access(LUCID_APPLY_UP))
+		return { success: false, message: '应用脚本不存在: ' + LUCID_APPLY_UP };
+
+	let dry = exec('/bin/sh ' + LUCID_APPLY_UP + ' --dry-run 2>&1');
+	let cmd = (dry.code == 0 && length(dry.stdout) > 0) ? trim(dry.stdout[0]) : '';
+
+	let out = exec('/bin/sh ' + LUCID_APPLY_UP + ' 2>&1');
+	let text = join('\n', out.stdout || []);
+
+	return {
+		success: out.code == 0,
+		message: text || (out.code == 0 ? '已应用连接设置' : 'tailscale up 失败'),
+		command: cmd
+	};
+}
+
+function preview_up_command_from_conf() {
+	if (!access(LUCID_APPLY_UP))
+		return { success: false, message: '应用脚本不存在: ' + LUCID_APPLY_UP };
+
+	if (!is_installed())
+		return { success: false, message: 'Tailscale 未安装' };
+
+	let out = exec('/bin/sh ' + LUCID_APPLY_UP + ' --dry-run 2>&1');
+	let cmd = length(out.stdout) > 0 ? trim(out.stdout[0]) : trim(join('\n', out.stdout || []));
+
+	if (out.code != 0 || !length(cmd))
+		return { success: false, message: join('\n', out.stdout || []) || '无法生成 tailscale up 命令' };
+
+	return { success: true, command: cmd };
+}
+
+function apply_saved_up(settings) {
 	if (!service_enabled())
 		return { success: true, skipped: true, message: '服务已停用，跳过 tailscale up' };
 
@@ -458,18 +541,11 @@ function apply_saved_up() {
 	if (!wait_tailscaled_ready())
 		return { success: false, message: 'tailscaled 未就绪，无法应用连接设置' };
 
-	let cmd = build_up_command(read_up_settings(), { reset: true });
-	if (!cmd)
-		return { success: false, message: 'tailscale CLI not found' };
+	let ui = settings ?? finalize_ui_settings(read_up_settings());
+	if (settings != null)
+		write_up_settings(ui);
 
-	let out = exec(`${cmd} 2>&1`);
-	let text = join('\n', out.stdout || []);
-
-	return {
-		success: out.code == 0,
-		message: text || (out.code == 0 ? '已应用连接设置' : 'tailscale up 失败'),
-		command: cmd
-	};
+	return run_up_from_conf();
 }
 
 function prepare_login_cmd() {
@@ -805,7 +881,9 @@ function parse_peers_from_json_file() {
 			online: (cols[4] != null ? cols[4] : cols['4']) == 'true',
 			active: (cols[5] != null ? cols[5] : cols['5']) == 'true',
 			lastseen: (cols[6] != null ? cols[6] : cols['6']) || '',
-			self: (cols[7] != null ? cols[7] : cols['7']) == 'true'
+			self: (cols[7] != null ? cols[7] : cols['7']) == 'true',
+			routes: (cols[8] != null ? cols[8] : cols['8']) || '',
+			path: (cols[9] != null ? cols[9] : cols['9']) || ''
 		});
 	}
 
@@ -889,13 +967,14 @@ methods.get_overview = {
 	call: function() {
 		uci.load('tailscale');
 		let installed = is_installed();
-		let version = access(VERSION_FILE) ? trim(readfile(VERSION_FILE) || '') : '';
+		let version = get_installed_version();
 
 		return {
 			installed: installed,
 			enabled: service_enabled(),
 			running: service_running(),
-			version: version
+			version: version,
+			luci_version: get_luci_app_version()
 		};
 	}
 };
@@ -978,6 +1057,38 @@ methods.check_update = {
 			latest: latest,
 			has_update: has_update,
 			message: has_update ? ('新版本：' + latest) : '已是最新版'
+		};
+	}
+};
+
+function parse_keyval_lines(text) {
+	let out = {};
+	if (!length(text))
+		return out;
+	for (let line in split(text, /\n/)) {
+		let m = match(line, /^([^=]+)=(.*)$/);
+		if (m)
+			out[m[1]] = m[2];
+	}
+	return out;
+}
+
+methods.check_download_network = {
+	call: function() {
+		if (!access(CHECK_NETWORK))
+			return { ok: false, message: '网络检测脚本不存在: ' + CHECK_NETWORK };
+
+		let r = exec(CHECK_NETWORK);
+		let kv = parse_keyval_lines(r.stdout || '');
+
+		return {
+			ok: kv.ok == '1',
+			internet: kv.internet == '1',
+			https: kv.https == '1',
+			github: kv.github == '1',
+			mirror: kv.mirror == '1',
+			mirror_prefix: kv.mirror_prefix || '',
+			message: kv.message || '网络检测失败'
 		};
 	}
 };
@@ -1067,7 +1178,7 @@ methods.get_up_settings = {
 methods.set_up_settings = {
 	args: { data: {} },
 	call: function(req) {
-		let settings = decode_up_settings_data(req?.args?.data);
+		let settings = extract_up_settings_request(req);
 		if (settings == null)
 			return { success: false, message: '无法解析连接设置数据' };
 
@@ -1076,16 +1187,37 @@ methods.set_up_settings = {
 	}
 };
 
-methods.apply_up_settings = {
+methods.preview_up_command = {
 	args: { data: {} },
 	call: function(req) {
-		let settings = decode_up_settings_data(req?.args?.data);
+		let settings = extract_up_settings_request(req);
 		if (settings == null)
 			return { success: false, message: '无法解析连接设置数据' };
 
 		write_up_settings(settings);
 
-		let up = apply_saved_up();
+		let preview = preview_up_command_from_conf();
+		if (!preview.success)
+			return preview;
+
+		return {
+			success: true,
+			command: preview.command,
+			settings: get_up_settings_for_ui()
+		};
+	}
+};
+
+methods.apply_up_settings = {
+	args: { data: {} },
+	call: function(req) {
+		let settings = extract_up_settings_request(req);
+		if (settings == null)
+			return { success: false, message: '无法解析连接设置数据' };
+
+		write_up_settings(settings);
+
+		let up = apply_saved_up(settings);
 		let auth_url = extract_auth_url(up.message || '');
 
 		return {
@@ -1100,7 +1232,7 @@ methods.apply_up_settings = {
 
 methods.apply_saved_up = {
 	call: function() {
-		return apply_saved_up();
+		return apply_saved_up(null);
 	}
 };
 

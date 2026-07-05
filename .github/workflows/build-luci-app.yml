@@ -88,18 +88,19 @@ jobs:
           TARGET_MK="./package/${{ env.PACKAGE_NAME }}/Makefile"
           [ -f "$TARGET_MK" ] || { echo "::error::Makefile 不存在"; exit 1; }
 
-          if ! grep -q '^PKG_VERSION:=' "$TARGET_MK"; then
-            if [ "${{ github.ref_type }}" = "tag" ]; then
-              NEW_VER="$(echo "${{ github.ref_name }}" | sed 's/^luci-v//')"
-              NEW_REL="1"
-            else
-              NEW_VER="$(date +'%Y.%m.%d')"
-              SHORT_SHA="$(git -C "${{ github.workspace }}" rev-parse --short HEAD)"
-              NEW_REL="${{ github.run_number }}.git-${SHORT_SHA}"
-            fi
-            sed -i "s|include \$(TOPDIR)/rules.mk|include \$(TOPDIR)/rules.mk\nPKG_VERSION:=${NEW_VER}\nPKG_RELEASE:=${NEW_REL}|" "$TARGET_MK"
-            echo "PKG_VERSION=${NEW_VER} PKG_RELEASE=${NEW_REL}"
+          bash "${{ github.workspace }}/scripts/sync-version.sh"
+
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            NEW_VER="$(echo "${{ github.ref_name }}" | sed 's/^luci-v//')"
+            NEW_REL="1"
+          else
+            NEW_VER="$(date +'%Y.%m.%d')"
+            SHORT_SHA="$(git -C "${{ github.workspace }}" rev-parse --short HEAD)"
+            NEW_REL="${{ github.run_number }}.git-${SHORT_SHA}"
           fi
+          sed -i "s/^PKG_VERSION:=.*/PKG_VERSION:=${NEW_VER}/" "$TARGET_MK"
+          sed -i "s/^PKG_RELEASE:=.*/PKG_RELEASE:=${NEW_REL}/" "$TARGET_MK"
+          echo "PKG_VERSION=${NEW_VER} PKG_RELEASE=${NEW_REL}"
 
           rm -rf output_ipk
           find ./bin -type f -name "${{ env.PACKAGE_NAME }}*.ipk" -delete 2>/dev/null || true

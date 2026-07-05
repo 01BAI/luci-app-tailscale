@@ -5,10 +5,13 @@
 'require poll';
 'require dom';
 
+/* 热部署后改此版本号，强制浏览器刷新 CSS/JS */
+const UI_REV = '1.0.0';
+
 const SETTINGS_FIELDS = [
 	['accept_routes', '接受路由', '--accept-routes', '', 'flag'],
-	['advertise_routes', '宣告路由', '--advertise-routes', '192.168.1.0/24', 'value'],
-	['netfilter_mode', 'Netfilter 模式', '--netfilter-mode', 'on', 'select', ['on', 'nodivert', 'off']],
+	['advertise_routes', '宣告路由', '--advertise-routes', '例如：192.168.1.0/24', 'value'],
+	['netfilter_mode', 'Netfilter 模式', '--netfilter-mode', 'nodivert', 'select', ['on', 'nodivert', 'off']],
 	['advertise_exit_node', '宣告出口节点', '--advertise-exit-node', '', 'flag'],
 	['exit_node', '出口节点', '--exit-node', '留空=不使用', 'value'],
 	['exit_node_allow_lan_access', '出口节点允许局域网', '--exit-node-allow-lan-access', '', 'flag'],
@@ -25,10 +28,13 @@ const callGetOverview = rpc.declare({ object: 'tailscale', method: 'get_overview
 const callGetStatus = rpc.declare({ object: 'tailscale', method: 'get_status' });
 const callRunInstall = rpc.declare({ object: 'tailscale', method: 'run_install', params: [ 'version' ] });
 const callGetInstallProgress = rpc.declare({ object: 'tailscale', method: 'get_install_progress' });
+const callCheckDownloadNetwork = rpc.declare({ object: 'tailscale', method: 'check_download_network' });
 const callRunUninstall = rpc.declare({ object: 'tailscale', method: 'run_uninstall' });
 const callCheckUpdate = rpc.declare({ object: 'tailscale', method: 'check_update' });
 const callGetUpSettings = rpc.declare({ object: 'tailscale', method: 'get_up_settings' });
 const callSetUpSettings = rpc.declare({ object: 'tailscale', method: 'set_up_settings', params: [ 'data' ] });
+const callPreviewUpCommand = rpc.declare({ object: 'tailscale', method: 'preview_up_command', params: [ 'data' ] });
+const callApplySavedUp = rpc.declare({ object: 'tailscale', method: 'apply_saved_up' });
 const callApplyUpSettings = rpc.declare({ object: 'tailscale', method: 'apply_up_settings', params: [ 'data' ] });
 const callStartLogin = rpc.declare({
 	object: 'tailscale',
@@ -89,7 +95,7 @@ function settingsLabel(label, cli) {
 	]);
 }
 
-function riskySettingsWarning(settings) {
+function confirmApplySettings(settings) {
 	const parts = [];
 	if (settings.exit_node && settings.exit_node.trim())
 		parts.push('出口节点：' + settings.exit_node.trim() + '（可能使本机无法从局域网访问）');
@@ -100,14 +106,68 @@ function riskySettingsWarning(settings) {
 	return parts.length ? parts.join('\n') : '';
 }
 
-function confirmApplySettings(settings) {
-	const warn = riskySettingsWarning(settings);
-	if (!warn)
-		return true;
-	return confirm(
-		'以下设置可能影响路由器本机网络，错误配置会导致 LuCI/SSH 无法访问：\n\n' +
-		warn + '\n\n仍要立即应用吗？'
-	);
+function showUpCommandConfirmModal(command, warningText) {
+	return new Promise(function(resolve, reject) {
+		const nodes = [
+			E('p', {}, '设置已保存。请确认以下命令是否正确：'),
+			E('pre', { class: 'ts-install-log' }, command || '')
+		];
+
+		if (warningText)
+			nodes.push(E('pre', { class: 'ts-settings-hint', style: 'margin:0.75rem 0 0' }, warningText));
+
+		nodes.push(E('div', { class: 'ts-field-actions', style: 'padding-left:0;margin-top:0.75rem' }, [
+			E('button', {
+				class: 'btn cbi-button-apply important',
+				click: function(ev) {
+					ev.preventDefault();
+					ui.hideModal();
+					resolve(true);
+				}
+			}, '确认执行'),
+			E('button', {
+				class: 'btn cbi-button-neutral',
+				click: function(ev) {
+					ev.preventDefault();
+					ui.hideModal();
+					reject(new Error('已取消'));
+				}
+			}, '取消')
+		]));
+
+		ui.showModal('确认执行 tailscale up', nodes);
+	});
+}
+
+function saveAndConfirmApplyUp(settings, settingsRoot) {
+	const warningText = confirmApplySettings(settings);
+
+	return callSetUpSettings(settings).then(function(saveRes) {
+		if (!saveRes || saveRes.success === false || saveRes.error)
+			throw new Error((saveRes && (saveRes.message || saveRes.error)) || '保存失败');
+		applyUpSettingsToForm(settingsRoot, saveRes.settings || settings);
+		return callPreviewUpCommand(settings);
+	}).then(function(preview) {
+		if (!preview || preview.success === false || !preview.command)
+			throw new Error((preview && preview.message) || '无法生成 tailscale up 命令');
+		return showUpCommandConfirmModal(preview.command, warningText);
+	}).then(function() {
+		return callApplySavedUp();
+	}).then(function(res) {
+		if (!res || res.error)
+			throw new Error((res && (res.message || res.error)) || '应用失败');
+		if (res.success === false || res.skipped) {
+			throw new Error(res.message || '应用失败');
+		}
+		if (res.auth_url)
+			window.open(res.auth_url, '_blank');
+		const body = [
+			res.command ? ('命令: ' + res.command + '\n\n') : '',
+			res.message || '已应用连接设置'
+		].join('');
+		ui.addNotification(null, E('pre', { style: 'white-space:pre-wrap;' }, body));
+		location.reload();
+	});
 }
 
 function section(title, children) {
@@ -211,11 +271,106 @@ function statusErrorInfo(status) {
 	]);
 }
 
+function extractPeerPath(peer) {
+	if (peer.path !== undefined && peer.path !== null && String(peer.path).length > 0)
+		return String(peer.path);
+	if (peer.self)
+		return '';
+
+	const online = peer.online === true || peer.online === 1 || peer.Online === true;
+	if (!online)
+		return '';
+
+	const cur = peer.CurAddr || peer.cur_addr || peer.curAddr || '';
+	const relay = peer.Relay || peer.relay || '';
+	const peerRelay = peer.PeerRelay || peer.peer_relay || peer.peerRelay || '';
+	const active = peer.active === true || peer.active === 1 || peer.Active === true;
+	const tx = Number(peer.TxBytes || peer.tx_bytes || peer.tx || 0);
+	const rx = Number(peer.RxBytes || peer.rx_bytes || peer.rx || 0);
+
+	if (peerRelay)
+		return 'peer_relay|' + peerRelay;
+	if (cur)
+		return 'direct|' + cur;
+	if (active && relay)
+		return 'relay|' + relay;
+	if (tx > 0 || rx > 0)
+		return 'direct|';
+	return 'none';
+}
+
+function formatPathDetail(detail) {
+	if (!detail)
+		return '';
+	return String(detail).replace(/^\[([^\]]+)\](:\d+)?$/, '$1$2');
+}
+
+function formatConnectionCell(p) {
+	if (p.self)
+		return E('span', { class: 'label' }, '本机');
+
+	if (!p.online && !p.active)
+		return '-';
+
+	const path = p.path || 'none';
+	if (path === 'none' || path === '')
+		return E('span', { class: 'ts-hint' }, '未建立');
+
+	const bar = path.indexOf('|');
+	const kind = bar >= 0 ? path.slice(0, bar) : path;
+	const detail = bar >= 0 ? path.slice(bar + 1) : '';
+	const hint = formatPathDetail(detail);
+
+	if (kind === 'direct') {
+		return E('span', {}, [
+			E('span', { class: 'label success' }, '直连'),
+			hint ? E('span', { class: 'ts-hint ts-peer-path-detail' }, ' ' + hint) : ''
+		]);
+	}
+	if (kind === 'relay') {
+		return E('span', {}, [
+			E('span', { class: 'label warning' }, '中继'),
+			hint ? E('span', { class: 'ts-hint ts-peer-path-detail' }, ' ' + hint) : ''
+		]);
+	}
+	if (kind === 'peer_relay') {
+		return E('span', {}, [
+			E('span', { class: 'label' }, '节点中继'),
+			hint ? E('span', { class: 'ts-hint ts-peer-path-detail' }, ' ' + hint) : ''
+		]);
+	}
+	return '-';
+}
+
+function extractSubnetRoutes(peer) {
+	if (peer.routes)
+		return String(peer.routes).replace(/,/g, ', ');
+	const allowed = peer.AllowedIPs || peer.allowedIPs;
+	if (!Array.isArray(allowed))
+		return '';
+	const routes = allowed.filter(function(cidr) {
+		return cidr && !/\/32$/.test(cidr) && !/\/128$/.test(cidr);
+	});
+	return routes.length ? routes.join(', ') : '';
+}
+
 function normalizePeers(peers) {
 	if (!peers)
 		return [];
 	if (Array.isArray(peers))
-		return peers;
+		return peers.map(function(p) {
+			return {
+				name: p.name || '-',
+				ip: p.ip || '-',
+				os: p.os || '-',
+				online: p.online === true || p.online === 1,
+				active: p.active === true || p.active === 1,
+				lastseen: p.lastseen || '',
+				self: p.self === true || p.self === 1,
+				routes: extractSubnetRoutes(p) || (p.routes ? String(p.routes).replace(/,/g, ', ') : ''),
+				path: p.self ? '' : (p.path || extractPeerPath(p))
+			};
+		});
 	if (typeof peers !== 'object')
 		return [];
 
@@ -225,6 +380,8 @@ function normalizePeers(peers) {
 		const name = p.name || p.hostname ||
 			(p.DNSName ? String(p.DNSName).split('.')[0] : '') ||
 			p.HostName || id;
+		const routes = p.routes || extractSubnetRoutes(p) ||
+			(Array.isArray(p.PrimaryRoutes) ? p.PrimaryRoutes.join(', ') : '');
 		return {
 			name: name,
 			ip: String(ip).replace(/<br>/g, ', '),
@@ -232,7 +389,9 @@ function normalizePeers(peers) {
 			online: p.online === true || p.online === 1 || p.Online === true,
 			active: p.active === true || p.active === 1 || p.Active === true,
 			lastseen: p.lastseen || p.LastSeen || '',
-			self: p.self === true || p.self === 1
+			self: p.self === true || p.self === 1,
+			routes: routes,
+			path: (p.self === true || p.self === 1) ? '' : extractPeerPath(p)
 		};
 	});
 }
@@ -271,12 +430,16 @@ function peersTable(peers) {
 			E('th', { class: 'th' }, 'IP'),
 			E('th', { class: 'th' }, '名称'),
 			E('th', { class: 'th' }, '系统'),
+			E('th', { class: 'th' }, '子网路由'),
+			E('th', { class: 'th' }, '连接方式'),
 			E('th', { class: 'th' }, '状态')
 		]),
 		...peers.map(p => E('tr', { class: 'tr' }, [
 			E('td', { class: 'td' }, p.ip || '-'),
 			E('td', { class: 'td' }, p.name || '-'),
 			E('td', { class: 'td' }, p.os || '-'),
+			E('td', { class: 'td ts-peer-routes' }, p.routes || '-'),
+			E('td', { class: 'td ts-peer-path' }, formatConnectionCell(p)),
 			E('td', { class: 'td' }, (p.online || p.active)
 				? E('span', { class: 'label success' }, formatPeerStatus(p))
 				: E('span', { class: 'label' }, formatPeerStatus(p)))
@@ -536,7 +699,14 @@ function runTailscaleInstall(version, isInstall) {
 		});
 	}
 
-	return callRunInstall(version || 'latest').then(function(res) {
+	statusEl.textContent = '正在检测网络...';
+	return callCheckDownloadNetwork().then(function(net) {
+		if (!net || !net.ok)
+			throw new Error((net && net.message) || '网络检测失败，无法下载 Tailscale');
+		updateLog('网络检测：' + (net.message || '通过') + '\n');
+		statusEl.textContent = isInstall ? '正在启动安装...' : '正在启动更新...';
+		return callRunInstall(version || 'latest');
+	}).then(function(res) {
 		if (!res || res.success === false)
 			throw new Error((res && res.message) || '无法启动安装');
 		updateLog('');
@@ -752,19 +922,19 @@ return view.extend({
 
 		/* 1. 版本信息 — 3 列 */
 		const hintEl = E('span', { class: 'ts-hint' });
+		const luciVer = overview.luci_version || UI_REV;
 		let versionRows;
 
 		if (!installed) {
-			versionRows = [[
-				'当前版本',
-				E('button', {
+			versionRows = [
+				['LuCI 插件', luciVer, ''],
+				['Tailscale', E('button', {
 					class: 'btn cbi-button-apply important',
 					click: ui.createHandlerFn(self, function() {
 						return doInstallOrUpdate('latest');
 					})
-				}, '安装 Tailscale'),
-				''
-			]];
+				}, '安装 Tailscale'), '']
+			];
 		} else {
 			const actionBtn = E('button', { class: 'btn cbi-button-action' }, '检测更新');
 			actionBtn.addEventListener('click', function(ev) {
@@ -795,13 +965,12 @@ return view.extend({
 					}
 				});
 			});
-			versionRows = [[
-				'当前版本',
-				E('span', {}, [
+			versionRows = [
+				['LuCI 插件', luciVer, ''],
+				['Tailscale', E('span', {}, [
 					E('span', {}, overview.version || status.version || '-'),
 					hintEl
-				]),
-				[
+				]), [
 					actionBtn,
 					E('button', {
 						class: 'btn cbi-button-negative',
@@ -809,8 +978,8 @@ return view.extend({
 							return doUninstall();
 						})
 					}, '卸载')
-				]
-			]];
+				]]
+			];
 		}
 
 		const versionModule = section('版本信息', [
@@ -882,26 +1051,10 @@ return view.extend({
 						class: 'btn cbi-button-apply important',
 						click: ui.createHandlerFn(self, function() {
 							const settings = collectUpSettings(settingsRoot);
-							if (!confirmApplySettings(settings))
-								return;
-							return callApplyUpSettings(settings).then(function(res) {
-								if (!res || res.error)
-									throw new Error((res && (res.message || res.error)) || '应用失败');
-								if (res.success === false) {
-									ui.addNotification(null, E('pre', { class: 'alert-message error' }, [
-										res.command ? ('命令: ' + res.command + '\n\n') : '',
-										res.message || '应用失败'
-									].join('')));
+							return saveAndConfirmApplyUp(settings, settingsRoot).catch(function(err) {
+								if ((err && err.message) === '已取消')
 									return;
-								}
-								if (res.auth_url) window.open(res.auth_url, '_blank');
-								ui.addNotification(null, E('pre', {}, [
-									res.command ? ('命令: ' + res.command + '\n\n') : '',
-									res.message || '已应用连接设置'
-								].join('')));
-								location.reload();
-							}).catch(function(err) {
-								ui.addNotification(null, E('p', { class: 'alert-message error' },
+								ui.addNotification(null, E('pre', { class: 'alert-message error', style: 'white-space:pre-wrap;' },
 									(err && err.message) || '应用失败'));
 							});
 						})
@@ -915,7 +1068,7 @@ return view.extend({
 		}
 
 		const modules = [
-			E('link', { rel: 'stylesheet', href: L.resource('view/tailscale/overview.css') }),
+			E('link', { rel: 'stylesheet', href: L.resource('view/tailscale/overview.css') + '?v=' + UI_REV }),
 			versionModule,
 			runtimeModule,
 			connectionModule,

@@ -10,7 +10,9 @@
 					"get_install_progress",
 					"get_up_settings",
 					"list_versions",
-					"check_update"
+					"check_update",
+					"check_download_network",
+					"preview_up_command"
 				]
 			},
 			"uci": [ "tailscale" ],
@@ -28,6 +30,7 @@
 					"run_uninstall",
 					"set_up_settings",
 					"apply_up_settings",
+					"apply_saved_up",
 					"start_login",
 					"do_login",
 					"do_logout",

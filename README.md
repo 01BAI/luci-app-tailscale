@@ -38,8 +38,40 @@ ipk 包架构为 **all**，各平台 OpenWrt 路由器通用。从 [GitHub Relea
 
 | Release | 说明 |
 |---------|------|
-| **luci-v***（如 `luci-v1.0.0`） | 正式版 |
+| **luci-v***（如 `luci-v1.0.0`） | 正式版（Semver，见下方版本规范） |
 | **luci-latest** | main 分支自动编译的开发版（预发布） |
+
+### 版本规范（LuCI 插件）
+
+**单一来源**：仓库根目录 [`VERSION`](VERSION)（当前 `1.0.0`）。修改版本后执行：
+
+```sh
+./scripts/sync-version.sh   # 同步到 luci-app.version 与 overview.js UI_REV
+```
+
+| 类型 | Git 标签 / Release | ipk 版本 |
+|------|-------------------|----------|
+| **正式版** | `luci-v1.0.0` | `PKG_VERSION=1.0.0`，`PKG_RELEASE=1` |
+| **开发版** | push `main` → `luci-latest` | `PKG_VERSION=YYYY.MM.DD`，`PKG_RELEASE=<run>.git-<sha>` |
+
+**Semver 升级**（仅正式版 tag 前改 `VERSION`）：
+
+- **MAJOR**：不兼容变更（配置格式、ubus API 等）
+- **MINOR**：新功能、向后兼容
+- **PATCH**：仅 bug 修复
+
+**Tailscale 二进制版本**独立于插件，跟随官方 Release（页面「Tailscale」一行显示 `/etc/tailscale/current_version`）。
+
+发布正式版：
+
+```sh
+# 1. 更新 VERSION 并同步
+echo "1.0.0" > VERSION && ./scripts/sync-version.sh
+git add VERSION root/etc/tailscale/luci-app.version htdocs/.../overview.js
+git commit -m "release: luci v1.0.0"
+git tag luci-v1.0.0
+git push origin main --tags   # 触发 CI 编译 ipk 并创建 GitHub Release
+```
 
 ### 一键安装（推荐）
 
@@ -211,7 +243,7 @@ ssh root@192.168.1.1 "opkg install --force-overwrite /tmp/luci-app-tailscale_*.i
 3. **连接设置**
    - 接受路由、宣告路由、Netfilter 模式、出口节点等 `tailscale up` 参数
    - 保存到 `/etc/tailscale/tailscale_up.conf`
-   - 「保存并应用」执行 `tailscale up --reset`
+   - 「保存并应用」执行 `tailscale up`（与 helper 脚本相同格式，不含 `--reset`）
    - 登录后**不会**自动应用连接设置（避免出口节点/接受路由导致 LAN 失联，需手动点「保存并应用」）
 
 ### 文件路径
@@ -224,7 +256,8 @@ ssh root@192.168.1.1 "opkg install --force-overwrite /tmp/luci-app-tailscale_*.i
 | 安装配置 | `/etc/tailscale/install.conf` |
 | tailscale up 配置 | `/etc/tailscale/tailscale_up.conf` |
 | 守护进程状态 | `/etc/config/tailscaled.state` |
-| 版本记录 | `/etc/tailscale/current_version` |
+| Tailscale 版本记录 | `/etc/tailscale/current_version` |
+| LuCI 插件版本 | `/etc/tailscale/luci-app.version` |
 | 启动脚本 | `/etc/init.d/tailscale` |
 | LuCI UCI | `/etc/config/tailscale` |
 

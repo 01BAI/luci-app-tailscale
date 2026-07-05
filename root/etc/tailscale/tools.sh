@@ -24,6 +24,134 @@ load_release_repo() {
 
 load_release_repo
 
+load_proxy_env() {
+	[ -f "$CONFIG_DIR/proxy.env" ] || return 0
+	# shellcheck disable=SC1090
+	. "$CONFIG_DIR/proxy.env"
+}
+
+load_proxy_env
+
+# 网络探测超时（秒），短于正式下载
+NET_PROBE_TIMEOUT=8
+
+# 兼容无 coreutils timeout 的 OpenWrt
+run_curl() {
+	if command -v timeout >/dev/null 2>&1; then
+		timeout "$TIME_OUT" curl "$@"
+	else
+		curl --connect-timeout "$TIME_OUT" --max-time "$TIME_OUT" "$@"
+	fi
+}
+
+run_wget() {
+	if command -v timeout >/dev/null 2>&1; then
+		timeout "$TIME_OUT" wget "$@"
+	else
+		wget --timeout="$TIME_OUT" -T "$TIME_OUT" "$@"
+	fi
+}
+
+# HTTP(S) 可达性探测
+probe_url() {
+	local url="$1"
+	local tmp="/tmp/.ts_net_probe.$$"
+	local prev_timeout="$TIME_OUT"
+
+	TIME_OUT="$NET_PROBE_TIMEOUT"
+	webget "$tmp" "$url" "echooff"
+	local rc=$?
+	TIME_OUT="$prev_timeout"
+	rm -f "$tmp"
+	return $rc
+}
+
+probe_icmp() {
+	local host="$1"
+	ping -c 1 -W "$NET_PROBE_TIMEOUT" "$host" >/dev/null 2>&1
+}
+
+has_default_route() {
+	ip route 2>/dev/null | grep -q '^default' && return 0
+	route -n 2>/dev/null | grep -q '^0.0.0.0' && return 0
+	return 1
+}
+
+# 安装前网络诊断；设置 NET_INTERNET_OK / NET_HTTPS_OK / NET_GITHUB_OK / NET_MIRROR_OK / NET_USABLE_MIRROR
+diagnose_download_network() {
+	local mirror_list trimmed
+
+	NET_INTERNET_OK=0
+	NET_HTTPS_OK=0
+	NET_GITHUB_OK=0
+	NET_MIRROR_OK=0
+	NET_USABLE_MIRROR=""
+
+	log_info "▶  检测网络连通性..."
+
+	if probe_icmp "www.baidu.com" || probe_icmp "223.5.5.5"; then
+		NET_INTERNET_OK=1
+		log_info "✅  基础网络可达（ICMP）"
+	elif has_default_route; then
+		NET_INTERNET_OK=1
+		log_warn "⚠️  存在默认路由，但 ICMP 探测无响应"
+	else
+		log_error "❌  无默认路由或无法连通外网，请检查 WAN / DNS / 网关"
+		return 1
+	fi
+
+	if [ -n "${HTTPS_PROXY:-}${HTTP_PROXY:-}" ]; then
+		log_info "ℹ️  已启用 HTTP 代理: ${HTTPS_PROXY:-$HTTP_PROXY}"
+	fi
+
+	if probe_url "https://www.baidu.com/" || probe_url "http://connectivitycheck.platform.hicloud.com/generate_204"; then
+		NET_HTTPS_OK=1
+		log_info "✅  HTTP/HTTPS 下载栈正常"
+	else
+		log_warn "⚠️  HTTP/HTTPS 探测失败（ping 通不代表能下载）"
+		log_warn "⚠️  请确认: opkg install ca-bundle curl libustream-mbedtls"
+	fi
+
+	if probe_url "https://github.com/"; then
+		NET_GITHUB_OK=1
+		log_info "✅  GitHub HTTPS 可达"
+	else
+		log_warn "⚠️  GitHub HTTPS 不可达"
+	fi
+
+	mirror_list=$(resolve_mirror_list "$MIRROR_LIST")
+	if [ -n "$mirror_list" ] && [ -f "$mirror_list" ]; then
+		while read -r mirror; do
+			trimmed=$(echo "$mirror" | sed 's|#.*||; s/^[[:space:]]*//; s/[[:space:]]*$//')
+			[ -z "$trimmed" ] && continue
+			trimmed=$(echo "$trimmed" | sed 's|/*$|/|')
+			if probe_url "${trimmed}https://github.com/${GITHUB_RELEASE_REPO}/"; then
+				NET_MIRROR_OK=1
+				NET_USABLE_MIRROR="$trimmed"
+				log_info "✅  GitHub 镜像可用: $trimmed"
+				break
+			fi
+		done < "$mirror_list"
+	fi
+
+	if [ "$NET_GITHUB_OK" = "1" ] || [ "$NET_MIRROR_OK" = "1" ]; then
+		return 0
+	fi
+
+	if [ "$NET_HTTPS_OK" != "1" ]; then
+		log_error "❌  HTTP/HTTPS 不可用，无法下载 tailscaled"
+		log_error "❌  请先执行: opkg install ca-bundle curl libustream-mbedtls"
+		return 1
+	fi
+
+	log_error "❌  GitHub 与 /etc/tailscale/proxies.txt 中的镜像均不可达"
+	log_error "❌  请任选其一："
+	log_error "    1) 为路由器配置科学上网 / 透明代理"
+	log_error "    2) 创建 /etc/tailscale/proxy.env 设置 HTTP_PROXY / HTTPS_PROXY"
+	log_error "    3) 编辑 /etc/tailscale/proxies.txt 添加本环境可用的 GitHub 镜像"
+	return 1
+}
+
 # 架构探测（统一入口）
 detect_arch() {
     local arch_raw="${1:-$(uname -m)}"
@@ -93,8 +221,24 @@ set_direct_mode() {
 }
 
 set_proxy_mode() {
-	# 不再依赖第三方 GitHub 镜像；直连失败时可配置 /etc/tailscale/proxies.txt
-	set_direct_mode
+	CUSTOM_RELEASE_PROXY="https://github.com"
+	CUSTOM_RAW_PROXY="https://github.com"
+	CUSTOM_API_PROXY="https://api.github.com"
+}
+
+resolve_mirror_list() {
+	local list="${1:-}"
+	if [ -n "$list" ] && [ -f "$list" ]; then
+		echo "$list"
+		return
+	fi
+	if [ -s "$VALID_MIRRORS" ]; then
+		echo "$VALID_MIRRORS"
+		return
+	fi
+	if [ -s "$MIRROR_LIST" ]; then
+		echo "$MIRROR_LIST"
+	fi
 }
 
 # 根据配置自动设置模式
@@ -104,18 +248,18 @@ apply_github_mode() {
 
 # 初始化日志系统
 log_info() {
-    echo -n "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] $1"
-    [ $# -eq 2 ] || echo
+    echo -n "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] $1" >&2
+    [ $# -eq 2 ] || echo >&2
 }
 
 log_warn() {
-    echo -n "[$(date '+%Y-%m-%d %H:%M:%S')] [WARNING] $1"
-    [ $# -eq 2 ] || echo
+    echo -n "[$(date '+%Y-%m-%d %H:%M:%S')] [WARNING] $1" >&2
+    [ $# -eq 2 ] || echo >&2
 }
 
 log_error() {
-    echo -n "[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] $1"
-    [ $# -eq 2 ] || echo
+    echo -n "[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] $1" >&2
+    [ $# -eq 2 ] || echo >&2
 }
 
 # 安全加载配置文件
@@ -148,8 +292,13 @@ webget() {
 
     # ----  优先使用 curl ----
     if command -v curl >/dev/null 2>&1; then
-        http_code=$(timeout "$TIME_OUT" curl $quiet $redirect \
+        local proxy_args=""
+        [ -n "${HTTPS_PROXY:-}" ] && proxy_args="-x $HTTPS_PROXY"
+        [ -z "$proxy_args" ] && [ -n "${HTTP_PROXY:-}" ] && proxy_args="-x $HTTP_PROXY"
+
+        http_code=$(run_curl $quiet $redirect \
             -A "$ua" \
+            $proxy_args \
             -w "%{http_code}" \
             -o "$outfile" \
             "$url" 2>/dev/null)
@@ -167,7 +316,7 @@ webget() {
 
         # wget 不直接返回 HTTP 状态码，需要解析 headers
         headers=$(mktemp)
-        timeout "$TIME_OUT" wget $q $r \
+        run_wget $q $r \
             --server-response --no-check-certificate \
             --header="User-Agent: $ua" \
             -O "$outfile" "$url" 2>"$headers"
@@ -181,6 +330,26 @@ webget() {
 
     log_error "❌ curl 和 wget 都不存在"
     return 1
+}
+
+# 跟随重定向，返回最终 URL（用于解析 releases/latest 真实版本号）
+webget_effective_url() {
+    local url="$1"
+    local ua="Tailscale-Helper"
+
+    if command -v curl >/dev/null 2>&1; then
+        local proxy_args=""
+        [ -n "${HTTPS_PROXY:-}" ] && proxy_args="-x $HTTPS_PROXY"
+        [ -z "$proxy_args" ] && [ -n "${HTTP_PROXY:-}" ] && proxy_args="-x $HTTP_PROXY"
+
+        run_curl -sI -L -A "$ua" $proxy_args -w '%{url_effective}' -o /dev/null "$url" 2>/dev/null
+        return $?
+    fi
+    return 1
+}
+
+parse_release_tag_from_url() {
+    echo "$1" | sed -n 's|.*/releases/download/\(v[^/]*\)/.*|\1|p' | head -n1
 }
 
 # 校验函数, 自动根据长度判断类型, 支持 openssl 回退

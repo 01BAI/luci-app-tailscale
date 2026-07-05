@@ -21,7 +21,7 @@ if [ "$AUTO_UPDATE" = "true" ]; then
     exit 0
   fi
 
-  if "$CONFIG_DIR/fetch_and_install.sh" --version="$remote" --mirror-list="$VALID_MIRRORS"; then
+  if "$CONFIG_DIR/fetch_and_install.sh" --version="$remote" --mirror-list="$CONFIG_DIR/proxies.txt"; then
     echo "$remote" > "$VERSION_FILE"
     log_info "✅  更新成功至版本 $remote"
     log_info "🛠️  重启以应用最新版..."
@@ -39,7 +39,7 @@ if [ "$AUTO_UPDATE" = "true" ]; then
 else
   if [ ! -x "/usr/local/bin/tailscaled" ]; then
     log_info "⚙️  未检测到 tailscaled，尝试安装版本 $current..."
-    if "$CONFIG_DIR/fetch_and_install.sh" --version="$current" --mirror-list="$VALID_MIRRORS"; then
+    if "$CONFIG_DIR/fetch_and_install.sh" --version="$current" --mirror-list="$CONFIG_DIR/proxies.txt"; then
       echo "$current" > "$VERSION_FILE"
     else
       log_error "❌  安装失败"

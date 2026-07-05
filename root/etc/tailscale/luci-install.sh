@@ -1,5 +1,5 @@
 #!/bin/sh
-# 非交互安装：GitHub 直连失败时自动切换代理。
+# 非交互安装：先检测网络，再按直连 / 镜像顺序下载。
 
 set -e
 
@@ -12,6 +12,10 @@ ensure_arch || exit 1
 
 log_info "▶  开始安装 Tailscale（版本: ${VERSION:-latest}）"
 log_info "▶  系统架构: $(uname -m) → ${ARCH:-检测中...}"
+
+if ! diagnose_download_network; then
+	exit 1
+fi
 
 HOST_NAME="$(uci -q get system.@system[0].hostname 2>/dev/null || hostname)"
 
@@ -33,7 +37,7 @@ do_install() {
 	if [ "$use_direct" = "true" ]; then
 		log_info "▶  尝试 GitHub 直连下载..."
 	else
-		log_info "▶  直连失败，尝试代理/镜像下载..."
+		log_info "▶  使用 GitHub 镜像下载..."
 	fi
 
 	cat > "$INST_CONF" <<EOF
@@ -48,15 +52,22 @@ EOF
 
 	"$CONFIG_DIR/fetch_and_install.sh" \
 		--version="$VERSION" \
-		--mirror-list="$VALID_MIRRORS"
+		--mirror-list="$CONFIG_DIR/proxies.txt"
 }
 
-if do_install true; then
+installed=0
+
+if [ "$NET_GITHUB_OK" = "1" ] && do_install true; then
 	log_info "✅  GitHub 直连安装成功"
-elif do_install false; then
-	log_info "✅  代理模式安装成功"
-else
-	log_error "❌  安装失败（直连与代理均失败）"
+	installed=1
+elif [ "$NET_MIRROR_OK" = "1" ] && do_install false; then
+	log_info "✅  镜像模式安装成功"
+	installed=1
+fi
+
+if [ "$installed" != "1" ]; then
+	log_error "❌  安装失败"
+	log_error "❌  网络检测已通过但下载失败，请检查 /etc/tailscale/proxy.env 或 proxies.txt"
 	exit 1
 fi
 

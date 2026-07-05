@@ -1,0 +1,5 @@
+# GitHub 下载镜像前缀（直连失败时使用，每行一个，须以 / 结尾）
+# 可自行增删；留空则仅尝试 GitHub 直连
+https://ghfast.top/
+https://ghproxy.net/
+https://gh-proxy.com/
