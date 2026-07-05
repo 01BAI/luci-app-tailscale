@@ -2,7 +2,7 @@
 # 在 OpenWrt / iStoreOS 上一键安装 luci-app-tailscale（从 GitHub Release 下载 ipk）
 #
 # 用法（路由器上）：
-#   curl -fsSL https://github.com/01BAI/luci-app-tailscale/raw/main/scripts/install-luci-app.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/01BAI/luci-app-tailscale/main/scripts/install-luci-app.sh | sh
 #
 # 可选参数：
 #   --repo=用户/仓库        默认 01BAI/luci-app-tailscale
@@ -19,6 +19,8 @@ TMP_DIR="/tmp/luci-app-tailscale-install.$$"
 
 log() { echo "[install-luci-app] $*"; }
 die() { log "ERROR: $*"; exit 1; }
+
+SCRIPT_REV="2026.07.05-2"
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -65,7 +67,18 @@ opkg_installed() {
 }
 
 opkg_has_libustream() {
-	opkg list-installed 2>/dev/null | grep -qE '^libustream-(openssl|mbedtls)'
+	# mbedtls 与 openssl 互斥，且 opkg 包名常带日期后缀（如 libustream-mbedtls20201210）
+	if opkg list-installed 2>/dev/null | grep -q 'libustream-mbedtls'; then
+		return 0
+	fi
+	if opkg list-installed 2>/dev/null | grep -q 'libustream-openssl'; then
+		return 0
+	fi
+	# 文件已存在说明已有 HTTPS 流支持（即使 list-installed 格式异常）
+	if [ -f /lib/libustream-ssl.so ]; then
+		return 0
+	fi
+	return 1
 }
 
 # ---------- 依赖 ----------
@@ -102,6 +115,8 @@ for pkg in $DEPS; do
 	log "安装依赖: $pkg"
 	pkg_install "$pkg" || die "依赖 $pkg 安装失败"
 done
+
+log "install-luci-app.sh rev ${SCRIPT_REV}"
 
 command -v curl >/dev/null 2>&1 || die "curl 不可用"
 

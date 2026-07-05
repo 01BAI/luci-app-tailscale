@@ -46,13 +46,14 @@ ipk 包架构为 **all**，各平台 OpenWrt 路由器通用。从 [GitHub Relea
 在 OpenWrt / iStoreOS 路由器 SSH 中执行：
 
 ```sh
-curl -fsSL https://github.com/01BAI/luci-app-tailscale/raw/main/scripts/install-luci-app.sh | sh
+# 推荐用 raw.githubusercontent.com（比 github.com/.../raw 更新更快）
+curl -fsSL https://raw.githubusercontent.com/01BAI/luci-app-tailscale/main/scripts/install-luci-app.sh | sh
 ```
 
 指定正式版 Release：
 
 ```sh
-curl -fsSL https://github.com/01BAI/luci-app-tailscale/raw/main/scripts/install-luci-app.sh | sh -s -- --tag=luci-v1.0.0
+curl -fsSL https://raw.githubusercontent.com/01BAI/luci-app-tailscale/main/scripts/install-luci-app.sh | sh -s -- --tag=luci-v1.0.0
 ```
 
 脚本会自动：更新软件源 → 安装 `curl` / `ca-bundle` / `kmod-tun` 等依赖 → 从 GitHub Release 下载 ipk → `opkg install`。
