@@ -96,27 +96,31 @@ if ! curl -fsSL --connect-timeout 20 -A "luci-app-tailscale-install" "$API" -o "
 	die "无法获取 Release 信息，请检查 --repo / --tag 或网络"
 fi
 
-extract_asset() {
-	local pattern="$1"
+extract_latest_asset() {
+	# 同一 Release 可能累积多次构建的 ipk，按文件名排序取最新（如 r8 > r7 > r5）
+	local prefix="$1"
 	local url=""
 
 	if command -v jq >/dev/null 2>&1; then
-		url=$(jq -r --arg p "$pattern" '.assets[] | select(.name | contains($p)) | .browser_download_url' "$JSON" | head -n1)
+		url=$(jq -r --arg p "$prefix" '
+			[.assets[] | select(.name | startswith($p)) | .browser_download_url]
+			| sort | last // empty
+		' "$JSON")
 	else
 		url=$(grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*"' "$JSON" \
 			| sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' \
-			| grep "$pattern" | head -n1)
+			| grep "/${prefix}" | sort -V | tail -n1)
 	fi
 
 	[ -n "$url" ] || return 1
 	echo "$url"
 }
 
-MAIN_URL=$(extract_asset "luci-app-tailscale_" || true)
+MAIN_URL=$(extract_latest_asset "luci-app-tailscale_" || true)
 [ -n "$MAIN_URL" ] || die "Release 中未找到 luci-app-tailscale_*.ipk，请先确认 GitHub Actions 已发布 ${TAG}"
 
 MAIN_IPK="$TMP_DIR/$(basename "$MAIN_URL")"
-log "下载 $(basename "$MAIN_IPK") ..."
+log "下载最新主包: $(basename "$MAIN_IPK") ..."
 curl -fsSL --connect-timeout 60 -A "luci-app-tailscale-install" "$MAIN_URL" -o "$MAIN_IPK" \
 	|| die "主包下载失败"
 

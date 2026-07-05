@@ -158,6 +158,7 @@ jobs:
           name: luci-app-tailscale (latest build)
           prerelease: true
           make_latest: false
+          replace_assets: true
           body: |
             由 main 分支自动编译的开发版 ipk，可直接下载后手动安装。
 
