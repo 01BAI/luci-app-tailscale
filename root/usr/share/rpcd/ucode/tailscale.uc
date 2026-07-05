@@ -184,19 +184,16 @@ function extract_up_settings_request(req) {
 }
 
 function exec(command) {
-	let stdout_content = '';
+	let stdout_lines = [];
 	let p = popen(command, 'r');
 	sleep(100);
 	if (p == null)
 		return { code: -1, stdout: [], stderr: ['exec failed'] };
 
 	for (let line = p.read('line'); length(line); line = p.read('line'))
-		stdout_content = stdout_content + line;
+		push(stdout_lines, rtrim(line));
 
-	stdout_content = rtrim(stdout_content);
-	stdout_content = stdout_content ? split(stdout_content, '\n') : [];
-
-	return { code: p.close(), stdout: stdout_content, stderr: [] };
+	return { code: p.close(), stdout: stdout_lines, stderr: [] };
 }
 
 function spawn(command) {
@@ -1063,9 +1060,24 @@ methods.check_update = {
 
 function parse_keyval_lines(text) {
 	let out = {};
-	if (!length(text))
+	let lines = [];
+
+	if (text == null)
 		return out;
-	for (let line in split(text, /\n/)) {
+
+	if (type(text) == 'array')
+		lines = text;
+	else {
+		let s = trim('' + text);
+		if (!length(s))
+			return out;
+		lines = split(s, '\n');
+	}
+
+	for (let i = 0; i < length(lines); i++) {
+		let line = trim(lines[i]);
+		if (!length(line))
+			continue;
 		let m = match(line, /^([^=]+)=(.*)$/);
 		if (m)
 			out[m[1]] = m[2];
@@ -1078,8 +1090,8 @@ methods.check_download_network = {
 		if (!access(CHECK_NETWORK))
 			return { ok: false, message: '网络检测脚本不存在: ' + CHECK_NETWORK };
 
-		let r = exec(CHECK_NETWORK + ' --quick');
-		let kv = parse_keyval_lines(r.stdout || '');
+		let r = exec('/bin/sh ' + CHECK_NETWORK + ' --quick 2>&1');
+		let kv = parse_keyval_lines(r.stdout);
 
 		return {
 			ok: kv.ok == '1',

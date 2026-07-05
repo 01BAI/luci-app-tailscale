@@ -617,6 +617,8 @@ function updateRuntimeSection(self, overview, status, installed) {
 function formatNetworkCheckError(net) {
 	if (!net)
 		return '网络检测失败，无法下载 Tailscale（RPC 无响应）';
+	if (net.message && net.message != '网络检测失败')
+		return net.message;
 	const parts = [net.message || '网络检测未通过'];
 	if (net.internet === false)
 		parts.push('外网：不可用');
@@ -624,7 +626,7 @@ function formatNetworkCheckError(net) {
 		parts.push('HTTPS：不可用（需 opkg install ca-bundle curl libustream-mbedtls）');
 	if (net.github === false && net.mirror === false)
 		parts.push('GitHub/镜像：预检未通过');
-	parts.push('SSH 诊断: /etc/tailscale/check_network.sh');
+	parts.push('SSH 诊断: /etc/tailscale/check_network.sh --quick');
 	return parts.join('\n');
 }
 
