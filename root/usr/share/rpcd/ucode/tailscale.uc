@@ -88,7 +88,7 @@ const UP_UI_FLAGS = {
 };
 
 const UP_UI_DEFAULTS = {
-	accept_routes: 'true',
+	accept_routes: 'false',
 	netfilter_mode: 'nodivert'
 };
 
@@ -590,6 +590,8 @@ function read_login_rc() {
 }
 
 function install_running() {
+	if (access(INSTALL_RC_FILE))
+		return false;
 	if (!access(INSTALL_PID_FILE))
 		return false;
 	let pid = trim(readfile(INSTALL_PID_FILE) || '');

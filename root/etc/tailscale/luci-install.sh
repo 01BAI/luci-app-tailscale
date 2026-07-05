@@ -72,16 +72,15 @@ if [ "$installed" != "1" ]; then
 fi
 
 log_info "▶  配置 init 服务与 cron..."
+export TS_SKIP_APPLY_UP=1
 "$CONFIG_DIR/setup_service.sh"
 "$CONFIG_DIR/luci-setup-cron.sh" "$AUTO_UPDATE"
+unset TS_SKIP_APPLY_UP
 
 uci -q set tailscale.settings.enabled='1' || true
 uci -q set tailscale.settings.version="$VERSION" || true
 uci -q set tailscale.settings.auto_update="$([ "$AUTO_UPDATE" = "true" ] && echo 1 || echo 0)" || true
 uci commit tailscale 2>/dev/null || true
-
-/etc/init.d/tailscale enable
-/etc/init.d/tailscale start
 
 log_info "✅  安装流程完成"
 echo "OK"

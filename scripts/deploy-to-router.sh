@@ -42,7 +42,7 @@ if [ ! -f /etc/tailscale/tailscale_up.conf ]; then
 	cat > /etc/tailscale/tailscale_up.conf <<'CONF'
 # tailscale up 参数，由 LuCI 管理
 # 格式: --参数名="值"
---accept-routes="true"
+--accept-routes="false"
 --netfilter-mode="nodivert"
 CONF
 fi

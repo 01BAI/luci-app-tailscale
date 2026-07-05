@@ -51,7 +51,25 @@ stop_service() {
 }
 
 schedule_apply_up() {
-  [ -x "$CONFIG_DIR/luci-apply-up.sh" ] && ( sleep 2; "$CONFIG_DIR/luci-apply-up.sh" ) &
+  [ "$TS_SKIP_APPLY_UP" = "1" ] && return 0
+  [ -x "$CONFIG_DIR/luci-apply-up.sh" ] || return 0
+  (
+    sleep 2
+    TS_BIN=$(command -v tailscale 2>/dev/null) || TS_BIN="/usr/bin/tailscale"
+    TS_CMD="$TS_BIN"
+    for s in /var/run/tailscale/tailscaled.sock /tmp/tailscaled.sock; do
+      [ -S "$s" ] && TS_CMD="$TS_BIN --socket=$s" && break
+    done
+    state=$($TS_CMD status --json 2>/dev/null | grep -o '"BackendState":"[^"]*"' | head -n1 | sed 's/.*:"//;s/"$//')
+    case "$state" in
+      Running|Starting)
+        "$CONFIG_DIR/luci-apply-up.sh"
+        ;;
+      *)
+        log_info "ℹ️  尚未登录，跳过自动 tailscale up（请在 LuCI 点击登录）"
+        ;;
+    esac
+  ) >>/tmp/tailscale_boot_apply.log 2>&1 &
 }
 EOF
 
