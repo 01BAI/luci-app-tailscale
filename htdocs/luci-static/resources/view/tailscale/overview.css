@@ -159,6 +159,7 @@
 .tailscale-overview .ts-peers-table .td {
 	padding: 0.35rem 0.5rem;
 	white-space: nowrap;
+	text-align: left;
 }
 
 .tailscale-overview .ts-peers-table .td:first-child {

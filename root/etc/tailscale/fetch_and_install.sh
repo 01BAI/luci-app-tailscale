@@ -15,17 +15,14 @@ get_latest_version() {
     local json=""
     local version=""
 
-    # 使用 webget 下载 JSON
     if ! webget "$tmp_json_file" "$api_url" "echooff"; then
         log_error "❌  错误：获取版本信息失败。"
         return 1
     fi
 
-    # 读取 JSON 内容
     json=$(cat "$tmp_json_file")
     rm -f "$tmp_json_file"
 
-    # 使用 jq 或 grep/sed 提取 tag_name
     if command -v jq >/dev/null 2>&1; then
         version=$(echo "$json" | jq -r '.tag_name // empty')
     else
@@ -92,12 +89,9 @@ download_file() {
     fi
 }
 
-
-# 主安装流程（与 CH3NGYZ/small-tailscale-openwrt 一致：单一 ts_include_cli 二进制 + 软链）
 install_tailscale() {
     local version=$1
-    local mode=$2
-    local mirror_list=$3
+    local mirror_list=$2
 
     local arch="$ARCH"
     local tailscale_temp_path="/tmp/tailscaled.$$"
@@ -108,7 +102,6 @@ install_tailscale() {
     sha_file="/tmp/SHA256SUMS.$$"
     md5_file="/tmp/MD5SUMS.$$"
 
-    # 下载校验文件
     download_file "${release_version_suffix}/SHA256SUMS.txt" "$sha_file" "$mirror_list" || log_warn "⚠️  无法获取 SHA256 校验文件"
     download_file "${release_version_suffix}/MD5SUMS.txt" "$md5_file" "$mirror_list" || log_warn "⚠️  无法获取 MD5 校验文件"
 
@@ -128,34 +121,25 @@ install_tailscale() {
     fi
 
     chmod +x "$tailscale_temp_path"
-    if [ "$mode" = "local" ]; then
-        mkdir -p /usr/local/bin
-        mv "$tailscale_temp_path" /usr/local/bin/tailscaled
-        ln -sf /usr/local/bin/tailscaled /usr/bin/tailscaled
-        ln -sf /usr/local/bin/tailscaled /usr/bin/tailscale
-        log_info "✅  已安装到 /usr/local/bin/（tailscale / tailscaled 共用同一二进制）"
-    else
-        mv "$tailscale_temp_path" /tmp/tailscaled
-        ln -sf /tmp/tailscaled /usr/bin/tailscaled
-        ln -sf /tmp/tailscaled /usr/bin/tailscale
-        log_info "✅  已安装到 /tmp (内存模式)"
-    fi
+    mkdir -p /usr/local/bin
+    mv "$tailscale_temp_path" /usr/local/bin/tailscaled
+    ln -sf /usr/local/bin/tailscaled /usr/bin/tailscaled
+    ln -sf /usr/local/bin/tailscaled /usr/bin/tailscale
+    log_info "✅  已安装到 /usr/local/bin/"
 
     echo "$version" > "$VERSION_FILE"
 }
 
-# 参数解析
-MODE="local"
 VERSION="latest"
 MIRROR_LIST=""
 DRY_RUN=false
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --mode=*) MODE="${1#*=}"; shift ;;
         --version=*) VERSION="${1#*=}"; shift ;;
         --mirror-list=*) MIRROR_LIST="${1#*=}"; shift ;;
         --dry-run) DRY_RUN=true; shift ;;
+        --mode=*) shift ;;
         *) log_error "未知参数: $1"; exit 1 ;;
     esac
 done
@@ -180,11 +164,9 @@ if [ "$VERSION" = "latest" ]; then
     fi
 fi
 
-# 干跑模式（只输出版本号）
 if [ "$DRY_RUN" = "true" ]; then
     echo "$VERSION"
     exit 0
 fi
 
-# 执行安装
-install_tailscale "$VERSION" "$MODE" "$MIRROR_LIST"
+install_tailscale "$VERSION" "$MIRROR_LIST"

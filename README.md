@@ -90,7 +90,7 @@ git push origin luci-v1.0.0
 | `tools.sh` | 公共库：架构探测、GitHub 下载、日志 |
 | `fetch_and_install.sh` | 从 Release 下载 `tailscaled-linux-$arch` 并校验安装 |
 | `setup_service.sh` | 生成 `/etc/init.d/tailscale`（procd 管理 tailscaled） |
-| `luci-install.sh` | LuCI 非交互安装（本地模式） |
+| `luci-install.sh` | LuCI 非交互安装 |
 | `luci-uninstall.sh` | LuCI 卸载 |
 | `luci-apply-up.sh` | 应用 `tailscale up` 连接设置 |
 | `luci-login.sh` | 登录流程辅助 |

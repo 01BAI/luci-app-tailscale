@@ -18,8 +18,7 @@ const LUCID_LIST_PEERS = '/etc/tailscale/luci-list-peers.sh';
 const STATUS_JSON_TMP = '/tmp/tailscale_luci_status.json';
 
 const PATHS = {
-	binary_local: '/usr/local/bin/tailscaled',
-	binary_tmp: '/tmp/tailscaled',
+	binary: '/usr/local/bin/tailscaled',
 	cli: '/usr/bin/tailscale',
 	install_conf: INSTALL_CONF,
 	up_conf: UP_CONF,
@@ -198,8 +197,7 @@ function parse_shell_conf(path) {
 const CLI_CANDIDATES = [
 	PATHS.cli,
 	'/usr/sbin/tailscale',
-	PATHS.binary_local,
-	PATHS.binary_tmp
+	PATHS.binary
 ];
 
 function resolve_cli() {
@@ -229,12 +227,6 @@ function tailscale_bin() {
 
 function tailscale_cli() {
 	return resolve_cli();
-}
-
-function binary_path(mode) {
-	if (mode == 'tmp')
-		return PATHS.binary_tmp;
-	return PATHS.binary_local;
 }
 
 function fetch_github_releases(page) {
@@ -902,7 +894,7 @@ methods.get_overview = {
 		return {
 			installed: installed,
 			enabled: service_enabled(),
-			running: is_daemon_running(),
+			running: service_running(),
 			version: version
 		};
 	}
@@ -1229,7 +1221,7 @@ methods.set_service_enabled = {
 		return {
 			success: out.code == 0,
 			enabled: on,
-			running: on && out.code == 0,
+			running: service_running(),
 			message: join('\n', out.stdout || []) || (on ? '已启用' : '已停用')
 		};
 	}

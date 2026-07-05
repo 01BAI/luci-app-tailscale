@@ -1,5 +1,5 @@
 #!/bin/sh
-# 非交互安装：仅本地模式，GitHub 直连失败时自动切换代理。
+# 非交互安装：GitHub 直连失败时自动切换代理。
 
 set -e
 
@@ -14,7 +14,6 @@ log_info "▶  开始安装 Tailscale（版本: ${VERSION:-latest}）"
 log_info "▶  系统架构: $(uname -m) → ${ARCH:-检测中...}"
 
 HOST_NAME="$(uci -q get system.@system[0].hostname 2>/dev/null || hostname)"
-MODE="local"
 
 mkdir -p "$CONFIG_DIR"
 
@@ -39,7 +38,6 @@ do_install() {
 
 	cat > "$INST_CONF" <<EOF
 # 安装配置记录 (LuCI)
-MODE=$MODE
 AUTO_UPDATE=$AUTO_UPDATE
 VERSION=$VERSION
 ARCH=$ARCH
@@ -49,7 +47,6 @@ TIMESTAMP=$(date +%s)
 EOF
 
 	"$CONFIG_DIR/fetch_and_install.sh" \
-		--mode="$MODE" \
 		--version="$VERSION" \
 		--mirror-list="$VALID_MIRRORS"
 }

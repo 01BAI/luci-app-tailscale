@@ -178,15 +178,19 @@ function settingsControl(key, placeholder, upSettings, type, options) {
 	});
 }
 
+function isServiceEnabled(overview) {
+	return overview.enabled !== false && overview.enabled !== 0 && overview.enabled !== '0';
+}
+
 function runtimeLabel(installed, overview, status) {
 	if (!installed) return E('span', { class: 'label' }, '不可用');
+	if (!isServiceEnabled(overview))
+		return E('span', { class: 'label' }, '已停用');
 	if (overview.running && status.status === 'Starting')
 		return E('span', { class: 'label warning' }, '连接中');
 	if (overview.running) return E('span', { class: 'label success' }, '运行中');
-	if (status.status === 'needs_login' && overview.enabled)
+	if (status.status === 'needs_login')
 		return E('span', { class: 'label warning' }, '已启用（待登录）');
-	if (overview.enabled === false)
-		return E('span', { class: 'label' }, '已停用');
 	return E('span', { class: 'label' }, '已停止');
 }
 
@@ -205,11 +209,6 @@ function statusErrorInfo(status) {
 		E('span', { class: 'label warning' }, '状态读取失败'),
 		E('span', { class: 'ts-hint' }, status.message || '无法执行 tailscale status，请更新 tailscaled 后刷新')
 	]);
-}
-
-function loggedInUserInfo(status) {
-	const display = status.tailnet || status.user || '-';
-	return E('span', {}, display);
 }
 
 function normalizePeers(peers) {
@@ -291,18 +290,6 @@ function renderPeersContent(peers) {
 	return E('span', { class: 'label' }, '-');
 }
 
-function connectionGrid(rows, peers, showPeersRow) {
-	const cells = [];
-	rows.forEach(r => cells.push(...grid3Row(r[0], r[1], r[2])));
-	if (showPeersRow) {
-		cells.push(
-			E('div', { class: 'ts-label' }, '节点信息'),
-			E('div', { class: 'ts-peers-value', 'data-ts-peers': '1' }, renderPeersContent(peers))
-		);
-	}
-	return E('div', { class: 'ts-grid-3' }, cells);
-}
-
 function sessionSavedInfo() {
 	return E('span', {}, [
 		E('span', {}, '已绑定 Tailnet'),
@@ -314,7 +301,155 @@ const LOGIN_POLL_INTERVAL = 2000;
 const LOGIN_POLL_MAX = 150;
 const INSTALL_POLL_INTERVAL = 1500;
 const INSTALL_POLL_MAX = 600;
-const STATUS_POLL_INTERVAL = 10;
+const CONNECTION_POLL_INTERVAL = 2;
+
+function loggedInUserInfo(status) {
+	if (!status.ipv4 && (status.status === 'Starting' || status.status === 'running'))
+		return E('span', { class: 'label warning' }, '连接中...');
+	const display = status.tailnet || status.user || '-';
+	return E('span', {}, display);
+}
+
+function tailscaleIpDisplay(status, canConnect, isLoggedIn) {
+	if (canConnect && isLoggedIn && status.ipv4)
+		return status.ipv4;
+	if (canConnect && isLoggedIn && (status.status === 'Starting' || !status.ipv4))
+		return E('span', { class: 'label warning' }, '连接中...');
+	return '-';
+}
+
+function buildTailnetCell(installed, canConnect, isLoggedIn, statusReadFailed, sessionSaved, status) {
+	if (!installed) {
+		return sessionSaved ? sessionSavedInfo() :
+			E('span', { class: 'label' }, '未安装');
+	}
+	if (statusReadFailed)
+		return statusErrorInfo(status);
+	if (canConnect && isLoggedIn)
+		return loggedInUserInfo(status);
+	if (canConnect)
+		return E('button', {
+			class: 'btn cbi-button-action important',
+			click: ui.createHandlerFn(null, function() {
+				return runTailscaleLogin();
+			})
+		}, '登录');
+	if (sessionSaved)
+		return sessionSavedInfo();
+	return E('span', { class: 'label' }, '服务未运行');
+}
+
+function buildTailnetAction(installed, canConnect, isLoggedIn, statusReadFailed) {
+	if (!installed || statusReadFailed || !canConnect || !isLoggedIn)
+		return '';
+	return E('button', {
+		class: 'btn cbi-button-negative',
+		click: ui.createHandlerFn(null, function() {
+			return callDoLogout().then(res => {
+				ui.addNotification(null, E('p', {}, res.message || ''));
+				location.reload();
+			});
+		})
+	}, '登出');
+}
+
+function connectionNeedsPoll(overview, status, installed) {
+	if (!installed || !overview.enabled || !overview.running)
+		return false;
+	if (status.login_status === 'status_error')
+		return false;
+	if (isLoggedInStatus(status))
+		return !status.ipv4 || status.status === 'Starting' || !status.tailnet;
+	return status.session_saved === true || status.session_saved === 1 ||
+		status.login_status === 'session_saved';
+}
+
+function connectionGrid(rows, peers, showPeersSection) {
+	const cells = [];
+	rows.forEach(function(r) {
+		const valueAttr = r[0] === 'Tailnet' ? { 'data-ts-connection': 'tailnet' } :
+			r[0] === 'Tailscale IP' ? { 'data-ts-connection': 'tsip' } : {};
+		const actionsAttr = r[0] === 'Tailnet' ? { 'data-ts-connection': 'tailnet-actions' } : {};
+		cells.push(
+			E('div', { class: 'ts-label' }, r[0]),
+			E('div', Object.assign({ class: 'ts-value' }, valueAttr), r[1] != null ? r[1] : ''),
+			E('div', Object.assign({ class: 'ts-actions' }, actionsAttr), r[2] != null ? r[2] : '')
+		);
+	});
+	if (showPeersSection) {
+		cells.push(
+			E('div', { class: 'ts-label' }, '节点信息'),
+			E('div', { class: 'ts-peers-value', 'data-ts-peers': '1' }, renderPeersContent(peers))
+		);
+	}
+	return E('div', { class: 'ts-grid-3' }, cells);
+}
+
+function updateConnectionSection(overview, status, installed) {
+	const canConnect = installed && overview.enabled && overview.running;
+	const isLoggedIn = isLoggedInStatus(status);
+	const statusReadFailed = status.login_status === 'status_error';
+	const sessionSaved = status.session_saved === true || status.session_saved === 1 ||
+		status.login_status === 'session_saved';
+
+	const tailnetEl = document.querySelector('.tailscale-overview [data-ts-connection="tailnet"]');
+	const tsipEl = document.querySelector('.tailscale-overview [data-ts-connection="tsip"]');
+	const actionsEl = document.querySelector('.tailscale-overview [data-ts-connection="tailnet-actions"]');
+	const peersEl = document.querySelector('.tailscale-overview [data-ts-peers="1"]');
+
+	if (tailnetEl) {
+		dom.content(tailnetEl, buildTailnetCell(
+			installed, canConnect, isLoggedIn, statusReadFailed, sessionSaved, status));
+	}
+	if (tsipEl) {
+		dom.content(tsipEl, tailscaleIpDisplay(status, canConnect, isLoggedIn));
+	}
+	if (actionsEl) {
+		dom.content(actionsEl, buildTailnetAction(installed, canConnect, isLoggedIn, statusReadFailed));
+	}
+	if (peersEl) {
+		const peers = (canConnect && isLoggedIn) ? normalizePeers(status.peers) : [];
+		dom.content(peersEl, renderPeersContent(peers));
+	}
+}
+
+function manageConnectionPolling(self, overview, status, installed) {
+	if (self._refreshConnection)
+		poll.remove(self._refreshConnection);
+	if (self._refreshPeers)
+		poll.remove(self._refreshPeers);
+	self._peerPollActive = false;
+
+	const canConnect = installed && overview.enabled && overview.running;
+	const isLoggedIn = isLoggedInStatus(status);
+
+	if (connectionNeedsPoll(overview, status, installed)) {
+		poll.add(self._refreshConnection, CONNECTION_POLL_INTERVAL);
+	} else if (canConnect && isLoggedIn) {
+		self._peerPollActive = true;
+		poll.add(self._refreshPeers, 10);
+	}
+}
+
+function buildRuntimeToggleButton(self, overview) {
+	const on = isServiceEnabled(overview);
+	return E('button', {
+		class: on ? 'btn cbi-button-negative' : 'btn cbi-button-apply important',
+		click: ui.createHandlerFn(self, function() {
+			return self._toggleService();
+		})
+	}, on ? '停用' : '启用');
+}
+
+function updateRuntimeSection(self, overview, status, installed) {
+	const statusEl = document.querySelector('.tailscale-overview [data-ts-runtime="status"]');
+	const actionEl = document.querySelector('.tailscale-overview [data-ts-runtime="action"]');
+
+	if (statusEl)
+		dom.content(statusEl, runtimeLabel(installed, overview, status));
+	if (actionEl)
+		dom.content(actionEl, installed ? buildRuntimeToggleButton(self, overview) : '');
+}
 
 function runTailscaleInstall(version, isInstall) {
 	let pollTimer = null;
@@ -527,6 +662,80 @@ return view.extend({
 		let pendingLatest = null;
 		const self = this;
 
+		self._liveOverview = overview;
+		self._liveStatus = status;
+
+		self._refreshPeers = function() {
+			const peersEl = document.querySelector('.tailscale-overview [data-ts-peers="1"]');
+			if (!peersEl)
+				return Promise.resolve();
+			return rpcCall(callGetStatus(), {}).then(function(st) {
+				dom.content(peersEl, renderPeersContent(normalizePeers(st.peers)));
+			});
+		};
+
+		self._refreshConnection = function() {
+			return Promise.all([
+				rpcCall(callGetOverview(), {}),
+				rpcCall(callGetStatus(), {})
+			]).then(function(res) {
+				self._liveOverview = res[0] || {};
+				self._liveStatus = res[1] || {};
+				const inst = !!self._liveOverview.installed;
+				updateRuntimeSection(self, self._liveOverview, self._liveStatus, inst);
+				updateConnectionSection(self._liveOverview, self._liveStatus, inst);
+
+				if (!connectionNeedsPoll(self._liveOverview, self._liveStatus, inst)) {
+					poll.remove(self._refreshConnection);
+					const canConnect = inst && self._liveOverview.enabled && self._liveOverview.running;
+					const isLoggedIn = isLoggedInStatus(self._liveStatus);
+					if (canConnect && isLoggedIn && !self._peerPollActive) {
+						self._peerPollActive = true;
+						poll.add(self._refreshPeers, 10);
+					}
+				}
+			});
+		};
+
+		self._toggleService = function() {
+			const ov = self._liveOverview || {};
+			const enabling = !isServiceEnabled(ov);
+			const actionWrap = document.querySelector('.tailscale-overview [data-ts-runtime="action"]');
+			const statusEl = document.querySelector('.tailscale-overview [data-ts-runtime="status"]');
+			const btn = actionWrap ? actionWrap.querySelector('button') : null;
+
+			if (btn)
+				btn.disabled = true;
+			if (statusEl)
+				dom.content(statusEl, E('span', { class: 'spinning' }, enabling ? '正在启用...' : '正在停用...'));
+
+			return callSetServiceEnabled(enabling).then(function(res) {
+				if (res && res.success === false)
+					throw new Error(res.message || '操作失败');
+				if (res && res.message)
+					ui.addNotification(null, E('p', {}, res.message));
+				return Promise.all([
+					rpcCall(callGetOverview(), {}),
+					rpcCall(callGetStatus(), {})
+				]);
+			}).then(function(res) {
+				self._liveOverview = res[0] || {};
+				self._liveStatus = res[1] || {};
+				const inst = !!self._liveOverview.installed;
+				updateRuntimeSection(self, self._liveOverview, self._liveStatus, inst);
+				updateConnectionSection(self._liveOverview, self._liveStatus, inst);
+				manageConnectionPolling(self, self._liveOverview, self._liveStatus, inst);
+			}).catch(function(err) {
+				ui.addNotification(null, E('p', { class: 'alert-message error' },
+					(err && err.message) || '操作失败'));
+				updateRuntimeSection(self, self._liveOverview || ov, self._liveStatus || status, installed);
+			}).finally(function() {
+				const b = actionWrap ? actionWrap.querySelector('button') : null;
+				if (b)
+					b.disabled = false;
+			});
+		};
+
 		function doInstallOrUpdate(version) {
 			return runTailscaleInstall(version || 'latest', !installed);
 		}
@@ -610,22 +819,15 @@ return view.extend({
 		]);
 
 		/* 2. 运行状态 — 3 列 */
-		const runtimeAction = installed ? E('button', {
-			class: overview.running ? 'btn cbi-button-negative' : 'btn cbi-button-apply important',
-			click: ui.createHandlerFn(self, function() {
-				return callSetServiceEnabled(!overview.running).then(res => {
-					ui.addNotification(null, E('p', {}, res.message || ''));
-					location.reload();
-				});
-			})
-		}, overview.running ? '停用' : '启用') : '';
+		const runtimeAction = installed ? buildRuntimeToggleButton(self, overview) : '';
 
 		const runtimeModule = section('运行状态', [
-			grid3([[
-				'状态',
-				runtimeLabel(installed, overview, status),
-				runtimeAction
-			]])
+			E('div', { class: 'ts-grid-3' }, [
+				E('div', { class: 'ts-label' }, '状态'),
+				E('div', { class: 'ts-value', 'data-ts-runtime': 'status' },
+					runtimeLabel(installed, overview, status)),
+				E('div', { class: 'ts-actions', 'data-ts-runtime': 'action' }, runtimeAction)
+			])
 		]);
 
 		/* 3. 连接状态 — 3 列 */
@@ -635,65 +837,21 @@ return view.extend({
 		const sessionSaved = status.session_saved === true || status.session_saved === 1 ||
 			status.login_status === 'session_saved';
 
-		const loginBtn = E('button', {
-			class: 'btn cbi-button-action important',
-			click: ui.createHandlerFn(self, function() {
-				return runTailscaleLogin();
-			})
-		}, '登录');
-
-		const logoutBtn = E('button', {
-			class: 'btn cbi-button-negative',
-			click: ui.createHandlerFn(self, function() {
-				return callDoLogout().then(res => {
-					ui.addNotification(null, E('p', {}, res.message || ''));
-					location.reload();
-				});
-			})
-		}, '登出');
-
-		let tailnetValue;
-		let tailnetAction = '';
-
-		if (!installed) {
-			tailnetValue = sessionSaved ? sessionSavedInfo() :
-				E('span', { class: 'label' }, '未安装');
-		} else if (statusReadFailed) {
-			tailnetValue = statusErrorInfo(status);
-		} else if (canConnect && isLoggedIn) {
-			tailnetValue = loggedInUserInfo(status);
-			tailnetAction = logoutBtn;
-		} else if (canConnect) {
-			tailnetValue = loginBtn;
-		} else if (sessionSaved) {
-			tailnetValue = sessionSavedInfo();
-		} else {
-			tailnetValue = E('span', { class: 'label' }, '服务未运行');
-		}
-
-		const showTailscaleIp = canConnect && isLoggedIn && status.ipv4;
+		const tailnetValue = buildTailnetCell(
+			installed, canConnect, isLoggedIn, statusReadFailed, sessionSaved, status);
+		const tailnetAction = buildTailnetAction(
+			installed, canConnect, isLoggedIn, statusReadFailed);
 
 		const peers = normalizePeers(status.peers);
-		const showPeersRow = installed && canConnect && isLoggedIn;
 
 		const connectionModule = section('连接状态', [
 			connectionGrid([
 				['Tailnet', tailnetValue, tailnetAction],
-				['Tailscale IP', showTailscaleIp ? status.ipv4 : '-', '']
-			], peers, showPeersRow)
+				['Tailscale IP', tailscaleIpDisplay(status, canConnect, isLoggedIn), '']
+			], peers, installed)
 		]);
 
-		if (showPeersRow) {
-			self._refreshPeers = function() {
-				const wrap = document.querySelector('.tailscale-overview [data-ts-peers="1"]');
-				if (!wrap)
-					return Promise.resolve();
-				return rpcCall(callGetStatus(), {}).then(function(st) {
-					dom.content(wrap, renderPeersContent(normalizePeers(st.peers)));
-				});
-			};
-			poll.add(self._refreshPeers, STATUS_POLL_INTERVAL);
-		}
+		manageConnectionPolling(self, overview, status, installed);
 
 		/* 4. 连接设置 — 2 列，与上面前两列对齐 */
 		let settingsModule;
@@ -772,6 +930,8 @@ return view.extend({
 	handleReset: null,
 
 	handleRemove: function() {
+		if (this._refreshConnection)
+			poll.remove(this._refreshConnection);
 		if (this._refreshPeers)
 			poll.remove(this._refreshPeers);
 	}

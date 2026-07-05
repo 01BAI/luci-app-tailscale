@@ -18,12 +18,11 @@ killall tailscaled 2>/dev/null || true
 sleep 1
 killall -9 tailscaled 2>/dev/null || true
 
-rm -f \
+	rm -f \
 	/usr/bin/tailscale \
 	/usr/bin/tailscaled \
 	/usr/local/bin/tailscale \
 	/usr/local/bin/tailscaled \
-	/tmp/tailscaled \
 	"$VERSION_FILE"
 
 ip link delete tailscale0 2>/dev/null || true

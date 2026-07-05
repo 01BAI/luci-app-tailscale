@@ -10,18 +10,6 @@ msgstr "Tailscale"
 msgid "Install / Reinstall"
 msgstr "安装 / 重装"
 
-msgid "Install Mode"
-msgstr "安装模式"
-
-msgid "Local (/usr/local/bin/tailscaled)"
-msgstr "本地安装 (/usr/local/bin/tailscaled)"
-
-msgid "Memory (/tmp/tailscaled)"
-msgstr "内存安装 (/tmp/tailscaled)"
-
-msgid "Local mode persists across reboot. Memory mode stores binary in /tmp and re-downloads on boot."
-msgstr "本地模式重启后保留；内存模式二进制存放在 /tmp，重启后需重新下载。"
-
 msgid "Auto Update"
 msgstr "自动更新"
 
@@ -97,11 +85,8 @@ msgstr "用途"
 msgid "Path"
 msgstr "路径"
 
-msgid "Binary (local mode)"
-msgstr "二进制（本地模式）"
-
-msgid "Binary (memory mode)"
-msgstr "二进制（内存模式）"
+msgid "Binary"
+msgstr "二进制"
 
 msgid "CLI symlink"
 msgstr "CLI 软链接"
