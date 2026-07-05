@@ -21,7 +21,7 @@ TMP_DIR="/tmp/luci-app-tailscale-install.$$"
 log() { echo "[install-luci-app] $*"; }
 die() { log "ERROR: $*"; exit 1; }
 
-SCRIPT_REV="2026.07.05-3"
+SCRIPT_REV="2026.07.05-4"
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -130,35 +130,124 @@ log "install-luci-app.sh rev ${SCRIPT_REV}"
 command -v curl >/dev/null 2>&1 || die "curl 不可用"
 
 # ---------- 下载 Release 资产 ----------
-API="https://api.github.com/repos/${REPO}/releases/tags/${TAG}"
 JSON="$TMP_DIR/release.json"
+BUILTIN_API_MIRRORS="https://ghfast.top/ https://ghproxy.net/ https://gh-proxy.com/"
 
-log "获取 Release: ${REPO} @ ${TAG}"
-if ! curl -fsSL --connect-timeout 20 -A "luci-app-tailscale-install" "$API" -o "$JSON"; then
-	die "无法获取 Release 信息，请检查 --repo / --tag 或网络"
-fi
+curl_fetch() {
+	local url="$1"
+	local out="$2"
+	curl -fsSL --connect-timeout 20 --max-time 90 \
+		-A "luci-app-tailscale-install/${SCRIPT_REV}" \
+		-H "Accept: application/vnd.github+json" \
+		"$url" -o "$out"
+}
+
+fetch_release_json() {
+	local api_path="repos/${REPO}/releases/tags/${TAG}"
+	local mirror trimmed url tried=0
+
+	log "获取 Release: ${REPO} @ ${TAG}"
+
+	if curl_fetch "https://api.github.com/${api_path}" "$JSON"; then
+		return 0
+	fi
+	log "WARN: GitHub API 直连失败（可能 403 限流），尝试镜像..."
+
+	if [ -f /etc/tailscale/proxies.txt ]; then
+		while read -r mirror; do
+			mirror=$(echo "$mirror" | sed 's|#.*||; s/^[[:space:]]*//; s/[[:space:]]*$//')
+			[ -z "$mirror" ] && continue
+			mirror=$(echo "$mirror" | sed 's|/*$|/|')
+			url="${mirror}https://api.github.com/${api_path}"
+			log "尝试 API 镜像: $url"
+			if curl_fetch "$url" "$JSON"; then
+				return 0
+			fi
+			tried=$((tried + 1))
+			[ "$tried" -ge 3 ] && break
+		done < /etc/tailscale/proxies.txt
+	fi
+
+	for mirror in $BUILTIN_API_MIRRORS; do
+		url="${mirror}https://api.github.com/${api_path}"
+		log "尝试 API 镜像: $url"
+		if curl_fetch "$url" "$JSON"; then
+			return 0
+		fi
+	done
+
+	return 1
+}
 
 extract_latest_asset() {
 	local prefix="$1"
 	local url=""
 
-	if command -v jq >/dev/null 2>&1; then
+	[ -s "$JSON" ] || return 1
+
+	# 优先 grep（OpenWrt jq 常缺正则库）
+	url=$(grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*'"${prefix}"'[^"]*"' "$JSON" \
+		| sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' \
+		| sort -V | tail -n1)
+
+	if [ -z "$url" ] && command -v jq >/dev/null 2>&1; then
 		url=$(jq -r --arg p "$prefix" '
-			[.assets[] | select(.name | startswith($p)) | .browser_download_url]
+			[.assets[]? | select(.name | startswith($p)) | .browser_download_url]
 			| sort | last // empty
-		' "$JSON")
-	else
-		url=$(grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*"' "$JSON" \
-			| sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' \
-			| grep "/${prefix}" | sort -V | tail -n1)
+		' "$JSON" 2>/dev/null)
 	fi
 
 	[ -n "$url" ] || return 1
 	echo "$url"
 }
 
-MAIN_URL=$(extract_latest_asset "luci-app-tailscale_" || true)
-[ -n "$MAIN_URL" ] || die "Release 中未找到 luci-app-tailscale_*.ipk，请先确认 GitHub Actions 已发布 ${TAG}"
+scrape_ipk_url_from_release_page() {
+	local mirror_prefix="${1:-}"
+	local page html rel
+
+	page="${mirror_prefix}https://github.com/${REPO}/releases/expanded_assets/${TAG}"
+	html="$TMP_DIR/release_page.html"
+
+	curl -fsSL --connect-timeout 20 --max-time 90 \
+		-A "luci-app-tailscale-install/${SCRIPT_REV}" \
+		"$page" -o "$html" 2>/dev/null || return 1
+
+	rel=$(grep -oE 'href="/[^"]+/releases/download/[^"]+luci-app-tailscale_[^"]+\.ipk"' "$html" \
+		| sed 's/href="//;s/"$//' | sort -V | tail -n1)
+	[ -n "$rel" ] || return 1
+
+	if [ -n "$mirror_prefix" ]; then
+		echo "${mirror_prefix}https://github.com${rel}"
+	else
+		echo "https://github.com${rel}"
+	fi
+}
+
+resolve_main_ipk_url() {
+	local url=""
+
+	if fetch_release_json; then
+		url=$(extract_latest_asset "luci-app-tailscale_" || true)
+	fi
+
+	if [ -z "$url" ]; then
+		log "WARN: API 不可用，尝试 GitHub Release 页面解析 ipk..."
+		url=$(scrape_ipk_url_from_release_page "" || true)
+	fi
+
+	if [ -z "$url" ]; then
+		for mirror in $BUILTIN_API_MIRRORS; do
+			log "尝试 Release 页面镜像: ${mirror}https://github.com/..."
+			url=$(scrape_ipk_url_from_release_page "$mirror" || true)
+			[ -n "$url" ] && break
+		done
+	fi
+
+	[ -n "$url" ] || die "无法获取 Release / ipk 下载地址，请检查 --repo / --tag 或网络"
+	echo "$url"
+}
+
+MAIN_URL=$(resolve_main_ipk_url)
 
 MAIN_IPK="$TMP_DIR/$(basename "$MAIN_URL")"
 log "下载: $(basename "$MAIN_IPK") ..."
