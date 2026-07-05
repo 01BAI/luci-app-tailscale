@@ -21,10 +21,12 @@ flowchart LR
 
 | 项目 | 说明 |
 |------|------|
-| 编译 | `.github/workflows/build-tailscaled.yml`，支持 amd64 / 386 / arm / arm64 / mips 等 8 种架构 |
-| 发布 | 本仓库 GitHub Release，资产命名 `tailscaled-linux-<arch>`，附 `SHA256SUMS.txt` / `MD5SUMS.txt` |
+| 编译 | `.github/workflows/build-tailscaled.yml`，与 [CH3NGYZ/small-tailscale-openwrt](https://github.com/CH3NGYZ/small-tailscale-openwrt) 相同：`go build -tags ts_include_cli -ldflags='-s -w' ./cmd/tailscaled`，UPX 压缩 |
+| 发布 | 本仓库 GitHub Release，资产命名 `tailscaled-linux-<arch>`（及 `.build` 未压缩版），附 `SHA256SUMS.txt` / `MD5SUMS.txt` |
 | 配置 | `/etc/tailscale/release.conf` 中的 `GITHUB_RELEASE_REPO`（默认 `01BAI/luci-app-tailscale`） |
-| 安装 | `fetch_and_install.sh` 下载、校验并安装到 `/usr/local/bin/tailscaled` |
+| 安装 | `fetch_and_install.sh` 下载 `tailscaled-linux-<arch>`，软链为 `tailscale` / `tailscaled` |
+
+**重要**：LuCI 读取 `tailscale status --json`。必须使用带 **`ts_include_cli`** 编译的单一二进制（与 CH3NGYZ 相同），再软链为 CLI。旧版若用 `build_dist.sh --extra-small` 或不含 `ts_include_cli` 的 tailscaled 冒充 CLI，会出现 `Access denied: status access denied`。
 
 **首次使用前**，需在 GitHub 网页运行一次 Actions：**Actions → Build tailscaled for OpenWrt → Run workflow**（版本留空则自动取官方 latest）。Release 生成后，路由器才能从 LuCI 安装 Tailscale。
 

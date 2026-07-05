@@ -11,6 +11,7 @@ const INSTALL_CONF = '/etc/tailscale/install.conf';
 const UP_CONF = '/etc/tailscale/tailscale_up.conf';
 const VERSION_FILE = '/etc/tailscale/current_version';
 const LUCID_INSTALL = '/etc/tailscale/luci-install.sh';
+const LUCID_INSTALL_BG = '/etc/tailscale/luci-install-bg.sh';
 const LUCID_LOGIN = '/etc/tailscale/luci-login.sh';
 const LUCID_UNINSTALL = '/etc/tailscale/luci-uninstall.sh';
 const LUCID_LIST_PEERS = '/etc/tailscale/luci-list-peers.sh';
@@ -489,6 +490,9 @@ function prepare_login_cmd() {
 const LOGIN_LOG = '/tmp/tailscale_luci_up.log';
 const LOGIN_PID_FILE = '/tmp/tailscale_luci_up.pid';
 const LOGIN_RC_FILE = '/tmp/tailscale_luci_up.status';
+const INSTALL_LOG = '/tmp/tailscale_luci_install.log';
+const INSTALL_PID_FILE = '/tmp/tailscale_luci_install.pid';
+const INSTALL_RC_FILE = '/tmp/tailscale_luci_install.status';
 const LOGIN_CMD_FILE = '/tmp/tailscale_luci_up.cmd';
 
 function extract_auth_url_from_log() {
@@ -511,6 +515,28 @@ function read_login_rc() {
 		return null;
 	let v = trim(readfile(LOGIN_RC_FILE) || '');
 	return length(v) ? int(v) : null;
+}
+
+function install_running() {
+	if (!access(INSTALL_PID_FILE))
+		return false;
+	let pid = trim(readfile(INSTALL_PID_FILE) || '');
+	if (!length(pid))
+		return false;
+	return exec(`kill -0 ${pid} 2>/dev/null`).code == 0;
+}
+
+function read_install_rc() {
+	if (!access(INSTALL_RC_FILE))
+		return null;
+	let v = trim(readfile(INSTALL_RC_FILE) || '');
+	return length(v) ? int(v) : null;
+}
+
+function read_install_log() {
+	if (!access(INSTALL_LOG))
+		return '';
+	return readfile(INSTALL_LOG) || '';
 }
 
 function login_log_has_error() {
@@ -541,7 +567,7 @@ function is_daemon_running() {
 	];
 
 	for (let s in sockets) {
-		if (access(sockets[s]))
+		if (access(s))
 			return true;
 	}
 
@@ -628,6 +654,15 @@ function is_tailscale_ip(ip) {
 	return length(ip) > 0 && match(ip, /^100\./) != null;
 }
 
+function split_first(s, delim) {
+	let parts = split(s || '', delim);
+	if (parts == null || length(parts) == 0)
+		return '';
+	if (parts[0] != null)
+		return parts[0];
+	return parts['0'] || '';
+}
+
 function extract_user_from_status(status_data) {
 	let uid = status_data?.Self?.UserID;
 	if (uid != null) {
@@ -669,29 +704,83 @@ function extract_tailnet_from_status(status_data) {
 	return '';
 }
 
-function split_first(s, delim) {
-	let parts = split(s || '', delim);
-	if (parts == null || length(parts) == 0)
-		return '';
-	if (parts[0] != null)
-		return parts[0];
-	return parts['0'] || '';
+function resolve_tailscale_socket() {
+	let sockets = [
+		'/var/run/tailscale/tailscaled.sock',
+		'/tmp/tailscaled.sock'
+	];
+
+	for (let s in sockets) {
+		if (access(s))
+			return s;
+	}
+	return null;
 }
 
-function load_tailscale_status_json(cli) {
-	exec(`${cli} status --json --peers > ${shell_quote(STATUS_JSON_TMP)} 2>/dev/null`);
-	if (!access(STATUS_JSON_TMP))
+function load_tailscale_status_json_via_api() {
+	let sock = resolve_tailscale_socket();
+	if (!sock)
 		return null;
 
-	let content = readfile(STATUS_JSON_TMP);
-	if (content == null || !length(trim(content)))
+	let out = exec(`/bin/sh -c ${shell_quote(
+		`curl -fsS --max-time 10 --unix-socket ${sock} ` +
+		`'http://local-tailscaled.sock/localapi/v0/status' 2>/dev/null`
+	)}`);
+	let raw = join('\n', out.stdout || []);
+	if (!length(trim(raw))) {
+		exec(`/bin/sh -c ${shell_quote(
+			`curl -fsS --max-time 10 --unix-socket ${sock} ` +
+			`'http://local-tailscaled.sock/localapi/v0/status' ` +
+			`-o ${shell_quote(STATUS_JSON_TMP)} 2>/dev/null`
+		)}`);
+		if (!access(STATUS_JSON_TMP))
+			return null;
+		raw = readfile(STATUS_JSON_TMP) || '';
+	}
+
+	if (!length(trim(raw)))
 		return null;
+
+	writefile(STATUS_JSON_TMP, raw);
 
 	try {
-		return json(content);
+		return json(raw);
 	} catch (e) {
 		return null;
 	}
+}
+
+function load_tailscale_status_json(cli) {
+	exec(`/bin/sh -c 'rm -f ${STATUS_JSON_TMP}'`);
+
+	let out = exec(`/bin/sh -c ${shell_quote(`${cli} status --json --peers 2>/dev/null`)}`);
+	let raw = join('\n', out.stdout || []);
+
+	if (!length(trim(raw))) {
+		out = exec(`/bin/sh -c ${shell_quote(
+			`${cli} status --json --peers > ${shell_quote(STATUS_JSON_TMP)} 2>/dev/null`
+		)}`);
+		if (access(STATUS_JSON_TMP))
+			raw = readfile(STATUS_JSON_TMP) || '';
+	}
+
+	if (!length(trim(raw)))
+		return load_tailscale_status_json_via_api();
+
+	writefile(STATUS_JSON_TMP, raw);
+
+	try {
+		return json(raw);
+	} catch (e) {
+		return load_tailscale_status_json_via_api();
+	}
+}
+
+function last_status_error(cli) {
+	let out = exec(`/bin/sh -c ${shell_quote(`${cli} status 2>&1 | head -n1; true`)}`);
+	if (length(out.stdout) > 0 && length(trim(out.stdout[0])) > 0)
+		return trim(out.stdout[0]);
+	return 'tailscale status 失败';
 }
 
 function parse_peers_from_json_file() {
@@ -746,7 +835,7 @@ function is_logged_in_from_status(status_data) {
 	let backend = trim(status_data?.BackendState || '');
 	if (backend == 'NeedsLogin')
 		return false;
-	if (backend == 'Running')
+	if (backend == 'Running' || backend == 'Starting')
 		return true;
 
 	if (is_tailscale_ip(tailscale_primary_ip(status_data)))
@@ -774,7 +863,8 @@ function fill_status_from_json(data, status_data) {
 		data.logged_in = true;
 	data.login_status = data.logged_in ? 'logged_in' :
 		parse_login_status(backend_state);
-	data.status = data.logged_in ? 'running' :
+	data.status = data.logged_in ?
+		(backend_state == 'Starting' ? 'Starting' : 'running') :
 		(data.login_status == 'needs_login' ? 'needs_login' : (backend_state || 'unknown'));
 }
 
@@ -784,6 +874,21 @@ function status_when_daemon_down(data) {
 	data.login_status = service_enabled() ? 'service_stopped' : 'service_disabled';
 	if (data.session_saved)
 		data.login_status = 'session_saved';
+}
+
+function status_when_status_unavailable(data, cli) {
+	data.session_saved = has_saved_session();
+	data.logged_in = false;
+
+	if (!is_daemon_running()) {
+		status_when_daemon_down(data);
+		return;
+	}
+
+	data.status = 'status_error';
+	data.login_status = 'status_error';
+	data.message = last_status_error(cli) +
+		'。请重新运行 GitHub Actions 编译 Release，并在 LuCI 中重装 tailscaled + tailscale CLI。';
 }
 
 const methods = {};
@@ -810,6 +915,7 @@ methods.get_status = {
 			login_status: 'not_installed',
 			logged_in: false,
 			session_saved: false,
+			message: '',
 			version: '',
 			ipv4: '',
 			ipv6: '',
@@ -836,7 +942,7 @@ methods.get_status = {
 
 		let status_data = load_tailscale_status_json(cli);
 		if (status_data == null) {
-			status_when_daemon_down(data);
+			status_when_status_unavailable(data, cli);
 			return data;
 		}
 
@@ -845,6 +951,7 @@ methods.get_status = {
 		} catch (e) {
 			data.status = 'error';
 			data.login_status = 'error';
+			data.message = '' + e;
 		}
 
 		data.peers = parse_peers_from_json_file();
@@ -888,19 +995,56 @@ methods.run_install = {
 	call: function(req) {
 		let version = req?.args?.version || 'latest';
 
-		if (!access(LUCID_INSTALL))
-			return { success: false, message: '安装脚本不存在: ' + LUCID_INSTALL };
+		if (!access(LUCID_INSTALL_BG))
+			return { success: false, message: '安装脚本不存在: ' + LUCID_INSTALL_BG };
+
+		if (install_running())
+			return { success: true, started: false, running: true, message: '安装正在进行中' };
 
 		uci.set('tailscale', 'settings', 'version', version);
 		uci.set('tailscale', 'settings', 'enabled', '1');
 		uci.commit('tailscale');
 
-		let cmd = `${LUCID_INSTALL} false ${shell_quote(version)} 2>&1`;
-		let out = exec(cmd);
+		spawn(`${LUCID_INSTALL_BG} false ${shell_quote(version)}`);
+
+		return { success: true, started: true, running: true, message: '安装已启动' };
+	}
+};
+
+methods.get_install_progress = {
+	call: function() {
+		let log_text = trim(read_install_log());
+		let running = install_running();
+		let rc = read_install_rc();
+		let done = !running && rc != null;
+
+		if (done) {
+			return {
+				running: false,
+				done: true,
+				success: rc == 0,
+				log: log_text,
+				message: rc == 0 ?
+					'安装成功' :
+					(log_text || ('安装失败，退出码 ' + rc))
+			};
+		}
+
+		if (running)
+			return {
+				running: true,
+				done: false,
+				success: false,
+				log: log_text,
+				message: log_text ? '安装中...' : '正在启动安装...'
+			};
 
 		return {
-			success: out.code == 0,
-			message: join('\n', out.stdout || []) || (out.code == 0 ? (version == 'latest' ? '安装成功' : '更新成功') : '操作失败')
+			running: false,
+			done: false,
+			success: false,
+			log: log_text,
+			message: '未检测到进行中的安装'
 		};
 	}
 };

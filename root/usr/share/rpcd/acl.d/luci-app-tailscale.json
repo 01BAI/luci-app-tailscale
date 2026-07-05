@@ -7,6 +7,7 @@
 					"get_overview",
 					"get_status",
 					"get_login_progress",
+					"get_install_progress",
 					"get_up_settings",
 					"list_versions",
 					"check_update"
@@ -16,7 +17,8 @@
 			"file": {
 				"/etc/tailscale/*": [ "read" ],
 				"/etc/config/tailscaled.state": [ "read" ],
-				"/var/log/tailscale*.log": [ "read" ]
+				"/var/log/tailscale*.log": [ "read" ],
+				"/tmp/tailscale_luci_install.log": [ "read" ]
 			}
 		},
 		"write": {

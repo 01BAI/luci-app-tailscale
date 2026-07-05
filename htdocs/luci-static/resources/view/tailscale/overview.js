@@ -24,6 +24,7 @@ const UP_KEYS = SETTINGS_FIELDS.map(function(f) { return f[0]; });
 const callGetOverview = rpc.declare({ object: 'tailscale', method: 'get_overview' });
 const callGetStatus = rpc.declare({ object: 'tailscale', method: 'get_status' });
 const callRunInstall = rpc.declare({ object: 'tailscale', method: 'run_install', params: [ 'version' ] });
+const callGetInstallProgress = rpc.declare({ object: 'tailscale', method: 'get_install_progress' });
 const callRunUninstall = rpc.declare({ object: 'tailscale', method: 'run_uninstall' });
 const callCheckUpdate = rpc.declare({ object: 'tailscale', method: 'check_update' });
 const callGetUpSettings = rpc.declare({ object: 'tailscale', method: 'get_up_settings' });
@@ -179,6 +180,8 @@ function settingsControl(key, placeholder, upSettings, type, options) {
 
 function runtimeLabel(installed, overview, status) {
 	if (!installed) return E('span', { class: 'label' }, '不可用');
+	if (overview.running && status.status === 'Starting')
+		return E('span', { class: 'label warning' }, '连接中');
 	if (overview.running) return E('span', { class: 'label success' }, '运行中');
 	if (status.status === 'needs_login' && overview.enabled)
 		return E('span', { class: 'label warning' }, '已启用（待登录）');
@@ -187,14 +190,21 @@ function runtimeLabel(installed, overview, status) {
 	return E('span', { class: 'label' }, '已停止');
 }
 
-function isLoggedInStatus(status, canConnect) {
+function isLoggedInStatus(status) {
 	if (status.login_status === 'logged_in')
 		return true;
 	if (status.logged_in === true || status.logged_in === 1)
 		return true;
-	if (canConnect && status.ipv4 && /^100\./.test(String(status.ipv4)))
-		return true;
+	if (status.login_status === 'status_error')
+		return false;
 	return false;
+}
+
+function statusErrorInfo(status) {
+	return E('span', {}, [
+		E('span', { class: 'label warning' }, '状态读取失败'),
+		E('span', { class: 'ts-hint' }, status.message || '无法执行 tailscale status，请更新 tailscaled 后刷新')
+	]);
 }
 
 function loggedInUserInfo(status) {
@@ -302,7 +312,106 @@ function sessionSavedInfo() {
 
 const LOGIN_POLL_INTERVAL = 2000;
 const LOGIN_POLL_MAX = 150;
+const INSTALL_POLL_INTERVAL = 1500;
+const INSTALL_POLL_MAX = 600;
 const STATUS_POLL_INTERVAL = 10;
+
+function runTailscaleInstall(version, isInstall) {
+	let pollTimer = null;
+	let pollAttempts = 0;
+	let finishedSuccess = false;
+	const statusEl = E('p', { class: 'spinning' }, isInstall ? '正在启动安装...' : '正在启动更新...');
+	const logEl = E('pre', { class: 'ts-install-log' }, '');
+	const closeBtn = E('button', {
+		class: 'btn cbi-button-action important',
+		style: 'display:none; margin-top:0.75rem;',
+		click: function(ev) {
+			ev.preventDefault();
+			stopPoll();
+			ui.hideModal();
+			if (finishedSuccess)
+				location.reload();
+		}
+	}, '关闭');
+
+	ui.showModal(isInstall ? '安装 Tailscale' : '更新 Tailscale', [
+		statusEl,
+		logEl,
+		closeBtn
+	]);
+
+	function stopPoll() {
+		if (pollTimer) {
+			clearInterval(pollTimer);
+			pollTimer = null;
+		}
+	}
+
+	function showCloseButton(label) {
+		closeBtn.textContent = label || '关闭';
+		closeBtn.style.display = '';
+	}
+
+	function closeFlow(err) {
+		stopPoll();
+		ui.hideModal();
+		if (err)
+			ui.addNotification(null, E('pre', { style: 'white-space:pre-wrap;' }, err.message || String(err)));
+	}
+
+	function updateLog(text) {
+		if (text == null)
+			return;
+		logEl.textContent = text;
+		logEl.scrollTop = logEl.scrollHeight;
+	}
+
+	function finishInstall(success) {
+		stopPoll();
+		statusEl.className = success ? 'label success' : 'alert-message error';
+		if (success) {
+			finishedSuccess = true;
+			statusEl.textContent = isInstall ? '安装完成' : '更新完成';
+			showCloseButton('关闭并刷新页面');
+		} else {
+			finishedSuccess = false;
+			statusEl.textContent = isInstall ? '安装失败' : '更新失败';
+			showCloseButton('关闭');
+		}
+	}
+
+	function pollProgress() {
+		pollAttempts++;
+		return callGetInstallProgress().then(function(p) {
+			updateLog(p.log || '');
+			if (p.running) {
+				statusEl.className = 'spinning';
+				statusEl.textContent = isInstall ? '正在安装，请稍候...' : '正在更新，请稍候...';
+				return;
+			}
+			if (p.done) {
+				finishInstall(!!p.success);
+				return;
+			}
+			if (pollAttempts >= INSTALL_POLL_MAX)
+				closeFlow(new Error('安装超时（已等待约 ' + Math.round(INSTALL_POLL_MAX * INSTALL_POLL_INTERVAL / 60000) + ' 分钟），请查看日志或刷新页面后重试'));
+		}).catch(function(err) {
+			if (pollAttempts >= INSTALL_POLL_MAX)
+				closeFlow(new Error((err && err.message) || '无法获取安装进度'));
+		});
+	}
+
+	return callRunInstall(version || 'latest').then(function(res) {
+		if (!res || res.success === false)
+			throw new Error((res && res.message) || '无法启动安装');
+		updateLog('');
+		return pollProgress();
+	}).then(function() {
+		pollTimer = setInterval(pollProgress, INSTALL_POLL_INTERVAL);
+	}).catch(function(err) {
+		closeFlow(err);
+	});
+}
 
 function runTailscaleLogin() {
 	let pollTimer = null;
@@ -419,15 +528,7 @@ return view.extend({
 		const self = this;
 
 		function doInstallOrUpdate(version) {
-			const isInstall = !installed;
-			ui.showModal('请稍候', [
-				E('p', { class: 'spinning' }, isInstall ? '正在安装最新版...' : '正在更新...')
-			]);
-			return callRunInstall(version || 'latest').then(res => {
-				ui.hideModal();
-				ui.addNotification(null, E('pre', {}, res.message || ''));
-				if (res.success) location.reload();
-			});
+			return runTailscaleInstall(version || 'latest', !installed);
 		}
 
 		function doUninstall() {
@@ -529,7 +630,8 @@ return view.extend({
 
 		/* 3. 连接状态 — 3 列 */
 		const canConnect = installed && overview.enabled && overview.running;
-		const isLoggedIn = isLoggedInStatus(status, canConnect);
+		const isLoggedIn = isLoggedInStatus(status);
+		const statusReadFailed = status.login_status === 'status_error';
 		const sessionSaved = status.session_saved === true || status.session_saved === 1 ||
 			status.login_status === 'session_saved';
 
@@ -556,6 +658,8 @@ return view.extend({
 		if (!installed) {
 			tailnetValue = sessionSaved ? sessionSavedInfo() :
 				E('span', { class: 'label' }, '未安装');
+		} else if (statusReadFailed) {
+			tailnetValue = statusErrorInfo(status);
 		} else if (canConnect && isLoggedIn) {
 			tailnetValue = loggedInUserInfo(status);
 			tailnetAction = logoutBtn;
@@ -567,8 +671,7 @@ return view.extend({
 			tailnetValue = E('span', { class: 'label' }, '服务未运行');
 		}
 
-		const showTailscaleIp = (canConnect && isLoggedIn && status.ipv4) ||
-			(canConnect && status.ipv4 && !isLoggedIn);
+		const showTailscaleIp = canConnect && isLoggedIn && status.ipv4;
 
 		const peers = normalizePeers(status.peers);
 		const showPeersRow = installed && canConnect && isLoggedIn;

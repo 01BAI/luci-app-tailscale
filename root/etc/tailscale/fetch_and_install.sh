@@ -93,7 +93,7 @@ download_file() {
 }
 
 
-# 主安装流程
+# 主安装流程（与 CH3NGYZ/small-tailscale-openwrt 一致：单一 ts_include_cli 二进制 + 软链）
 install_tailscale() {
     local version=$1
     local mode=$2
@@ -117,30 +117,28 @@ install_tailscale() {
     [ -s "$sha_file" ] && sha256=$(get_checksum "$sha_file" "$release_arch_filename")
     [ -s "$md5_file" ] && md5=$(get_checksum "$md5_file" "$release_arch_filename")
 
-    # 下载主程序并校验
     log_info "🔗  正在下载 Tailscale $version ($arch)..."
-    if ! download_file "$release_version_suffix/$release_arch_filename" "$tailscale_temp_path" "$mirror_list" "$sha256"; then
-        log_warn "⚠️  SHA256 校验失败，尝试使用 MD5..."
-        if ! download_file "$release_version_suffix/$release_arch_filename" "$tailscale_temp_path" "$mirror_list" "$md5"; then
+    if ! download_file "${release_version_suffix}/$release_arch_filename" "$tailscale_temp_path" "$mirror_list" "$sha256"; then
+        log_warn "⚠️  SHA256 校验失败，尝试 MD5..."
+        if ! download_file "${release_version_suffix}/$release_arch_filename" "$tailscale_temp_path" "$mirror_list" "$md5"; then
             log_error "❌  校验失败，安装中止"
             rm -f "$tailscale_temp_path"
             exit 1
         fi
     fi
 
-    # 安装
     chmod +x "$tailscale_temp_path"
     if [ "$mode" = "local" ]; then
         mkdir -p /usr/local/bin
         mv "$tailscale_temp_path" /usr/local/bin/tailscaled
         ln -sf /usr/local/bin/tailscaled /usr/bin/tailscaled
         ln -sf /usr/local/bin/tailscaled /usr/bin/tailscale
-        log_info "✅  安装到 /usr/local/bin/"
+        log_info "✅  已安装到 /usr/local/bin/（tailscale / tailscaled 共用同一二进制）"
     else
         mv "$tailscale_temp_path" /tmp/tailscaled
         ln -sf /tmp/tailscaled /usr/bin/tailscaled
         ln -sf /tmp/tailscaled /usr/bin/tailscale
-        log_info "✅  安装到 /tmp (内存模式)"
+        log_info "✅  已安装到 /tmp (内存模式)"
     fi
 
     echo "$version" > "$VERSION_FILE"

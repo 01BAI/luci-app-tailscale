@@ -10,6 +10,9 @@ VERSION="${2:-latest}"
 
 ensure_arch || exit 1
 
+log_info "▶  开始安装 Tailscale（版本: ${VERSION:-latest}）"
+log_info "▶  系统架构: $(uname -m) → ${ARCH:-检测中...}"
+
 HOST_NAME="$(uci -q get system.@system[0].hostname 2>/dev/null || hostname)"
 MODE="local"
 
@@ -27,6 +30,12 @@ do_install() {
 	GITHUB_DIRECT="$use_direct"
 	export GITHUB_DIRECT
 	apply_github_mode
+
+	if [ "$use_direct" = "true" ]; then
+		log_info "▶  尝试 GitHub 直连下载..."
+	else
+		log_info "▶  直连失败，尝试代理/镜像下载..."
+	fi
 
 	cat > "$INST_CONF" <<EOF
 # 安装配置记录 (LuCI)
@@ -54,6 +63,7 @@ else
 	exit 1
 fi
 
+log_info "▶  配置 init 服务与 cron..."
 "$CONFIG_DIR/setup_service.sh"
 "$CONFIG_DIR/luci-setup-cron.sh" "$AUTO_UPDATE"
 
@@ -65,4 +75,5 @@ uci commit tailscale 2>/dev/null || true
 /etc/init.d/tailscale enable
 /etc/init.d/tailscale start
 
+log_info "✅  安装流程完成"
 echo "OK"

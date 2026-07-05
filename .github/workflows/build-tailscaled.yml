@@ -1,5 +1,7 @@
 # 从 Tailscale 官方源码交叉编译 tailscaled，发布到本仓库 GitHub Release。
-# 产物命名与 OpenWrt 安装脚本一致：tailscaled-linux-<arch>
+# 编译方式严格对齐 CH3NGYZ/small-tailscale-openwrt：
+#   go build -tags ts_include_cli -ldflags='-s -w' ./cmd/tailscaled
+# 单一二进制 + 软链同时作为 tailscale / tailscaled 使用，再 UPX 压缩。
 #
 # 使用：GitHub 网页 → Actions → Build tailscaled for OpenWrt → Run workflow
 
@@ -16,6 +18,11 @@ on:
 permissions:
   contents: write
 
+env:
+  REPO_OFFICIAL: tailscale/tailscale
+  BUILD_PLATFORMS: amd64 386 arm arm64 mips mipsle mips64 mips64le
+  GO_BUILD_FLAGS: "-tags ts_include_cli -ldflags='-s -w'"
+
 jobs:
   resolve:
     runs-on: ubuntu-latest
@@ -30,7 +37,7 @@ jobs:
           if [ -n "$INPUT" ]; then
             TAG="$INPUT"
           else
-            TAG="$(curl -fsSL https://api.github.com/repos/tailscale/tailscale/releases/latest | jq -r '.tag_name')"
+            TAG="$(curl -fsSL https://api.github.com/repos/${{ env.REPO_OFFICIAL }}/releases/latest | jq -r '.tag_name')"
           fi
           [ -n "$TAG" ] && [ "$TAG" != "null" ] || { echo "无法获取 Tailscale 版本"; exit 1; }
           VER="${TAG#v}"
@@ -44,55 +51,70 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { arch: amd64,    goarch: amd64,    goarm: "", gomips: "" }
-          - { arch: 386,      goarch: 386,      goarm: "", gomips: "" }
-          - { arch: arm,      goarch: arm,      goarm: "7", gomips: "" }
-          - { arch: arm64,    goarch: arm64,    goarm: "", gomips: "" }
-          - { arch: mips,     goarch: mips,     goarm: "", gomips: softfloat }
-          - { arch: mipsle,   goarch: mipsle,   goarm: "", gomips: softfloat }
-          - { arch: mips64,   goarch: mips64,   goarm: "", gomips: "" }
-          - { arch: mips64le, goarch: mips64le, goarm: "", gomips: "" }
+        arch: [amd64, 386, arm, arm64, mips, mipsle, mips64, mips64le]
 
     steps:
       - name: Checkout Tailscale source
         uses: actions/checkout@v4
         with:
-          repository: tailscale/tailscale
+          repository: ${{ env.REPO_OFFICIAL }}
           ref: ${{ needs.resolve.outputs.tag }}
-          path: tailscale-src
 
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: tailscale-src/go.mod
+          go-version: stable
 
-      - name: Generate version metadata
-        id: ver
-        working-directory: tailscale-src
+      - name: Install latest UPX
         run: |
-          eval "$(CGO_ENABLED=0 go run ./cmd/mkversion)"
-          echo "long=${VERSION_LONG}" >> "$GITHUB_OUTPUT"
-          echo "short=${VERSION_SHORT}" >> "$GITHUB_OUTPUT"
+          set -e
+          LATEST_UPX=$(curl -s https://api.github.com/repos/upx/upx/releases/latest | grep -oP '"tag_name": "v\K[0-9.]+' | head -n1)
+          echo "Latest UPX version: $LATEST_UPX"
+          curl -LO "https://github.com/upx/upx/releases/download/v${LATEST_UPX}/upx-${LATEST_UPX}-amd64_linux.tar.xz"
+          tar -xf "upx-${LATEST_UPX}-amd64_linux.tar.xz"
+          sudo cp "upx-${LATEST_UPX}-amd64_linux/upx" /usr/local/bin/
+          upx --version
 
       - name: Build tailscaled (${{ matrix.arch }})
-        working-directory: tailscale-src
         env:
           CGO_ENABLED: "0"
           GOOS: linux
-          GOARCH: ${{ matrix.goarch }}
-          GOARM: ${{ matrix.goarm }}
-          GOMIPS: ${{ matrix.gomips }}
+          GOARCH: ${{ matrix.arch }}
         run: |
-          ./build_dist.sh --extra-small --box -o "tailscaled-linux-${{ matrix.arch }}" ./cmd/tailscaled
-          chmod +x "tailscaled-linux-${{ matrix.arch }}"
-          file "tailscaled-linux-${{ matrix.arch }}"
+          case "${{ matrix.arch }}" in
+            mips|mipsle)
+              export GOMIPS=softfloat
+              ;;
+          esac
+
+          binary_build="tailscaled-linux-${{ matrix.arch }}.build"
+          go build -o "$binary_build" ${{ env.GO_BUILD_FLAGS }} ./cmd/tailscaled
+          ls -la "$binary_build"
+
+      - name: Compress binary (${{ matrix.arch }})
+        run: |
+          binary_build="tailscaled-linux-${{ matrix.arch }}.build"
+          compressed="tailscaled-linux-${{ matrix.arch }}"
+
+          case "${{ matrix.arch }}" in
+            mips64|mips64le)
+              echo "跳过 ${{ matrix.arch }} 的 UPX 压缩（与 CH3NGYZ 一致）"
+              cp "$binary_build" "$compressed"
+              ;;
+            *)
+              upx --lzma --best --no-progress "$binary_build" -o "$compressed"
+              ;;
+          esac
+
+          ls -la "$binary_build" "$compressed"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: tailscaled-${{ matrix.arch }}
-          path: tailscale-src/tailscaled-linux-${{ matrix.arch }}
+          path: |
+            tailscaled-linux-${{ matrix.arch }}
+            tailscaled-linux-${{ matrix.arch }}.build
           if-no-files-found: error
 
   release:
@@ -109,8 +131,18 @@ jobs:
         run: |
           cd dist
           ls -la
-          sha256sum tailscaled-linux-* > SHA256SUMS.txt
-          md5sum tailscaled-linux-* > MD5SUMS.txt
+          echo "${{ needs.resolve.outputs.tag }}" > version.txt
+          sha256sum tailscaled-linux-*.build > SHA256SUMS.txt
+          for f in tailscaled-linux-*; do
+            case "$f" in *.build) continue ;; esac
+            sha256sum "$f"
+          done >> SHA256SUMS.txt
+          md5sum tailscaled-linux-*.build > MD5SUMS.txt
+          for f in tailscaled-linux-*; do
+            case "$f" in *.build) continue ;; esac
+            md5sum "$f"
+          done >> MD5SUMS.txt
+          sed -i 's/  */ /g' SHA256SUMS.txt MD5SUMS.txt
           cat SHA256SUMS.txt
 
       - name: Publish GitHub Release
@@ -124,9 +156,14 @@ jobs:
           body: |
             由 GitHub Actions 从 [tailscale/tailscale](https://github.com/tailscale/tailscale) `${{ needs.resolve.outputs.tag }}` 交叉编译。
 
-            供 **luci-app-tailscale** / `fetch_and_install.sh` 下载安装。
+            编译方式与 [CH3NGYZ/small-tailscale-openwrt](https://github.com/CH3NGYZ/small-tailscale-openwrt) 一致：
+            `go build -tags ts_include_cli -ldflags='-s -w' ./cmd/tailscaled`，UPX 压缩后发布 `tailscaled-linux-*`。
+
+            安装时下载 `tailscaled-linux-<arch>`，软链为 `/usr/bin/tailscale` 与 `/usr/bin/tailscaled` 即可。
           files: |
             dist/tailscaled-linux-*
+            dist/tailscaled-linux-*.build
+            dist/version.txt
             dist/SHA256SUMS.txt
             dist/MD5SUMS.txt
         env:
