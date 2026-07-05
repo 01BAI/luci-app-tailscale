@@ -7,52 +7,81 @@ ensure_arch || exit 1
 apply_github_mode
 
 GITHUB_API_LATEST_RELEASE_URL_SUFFIX="repos/${GITHUB_RELEASE_REPO}/releases/latest"
-
-valid_release_tag() {
-	case "$1" in
-		v*) return 0 ;;
-		*) return 1 ;;
-	esac
-}
+GITHUB_API_RELEASES_LIST_SUFFIX="repos/${GITHUB_RELEASE_REPO}/releases?per_page=30"
 
 parse_tag_from_json() {
-	local json="$1"
+	local json_file="$1"
 	local version=""
 
 	if command -v jq >/dev/null 2>&1; then
-		version=$(echo "$json" | jq -r '.tag_name // empty')
+		version=$(jq -r '.tag_name // empty' "$json_file" 2>/dev/null)
 	else
-		version=$(echo "$json" \
-			| grep -o '"tag_name"[ ]*:[ ]*"[^"]*"' \
+		version=$(grep -o '"tag_name"[ ]*:[ ]*"[^"]*"' "$json_file" \
 			| sed 's/.*"tag_name"[ ]*:[ ]*"\([^"]*\)".*/\1/' \
 			| head -n1)
 	fi
 
-	if valid_release_tag "$version"; then
+	if is_tailscale_binary_tag "$version"; then
 		echo "$version"
 		return 0
 	fi
 	return 1
 }
 
+parse_first_binary_tag_from_list_json() {
+	local json_file="$1"
+	local version=""
+
+	if command -v jq >/dev/null 2>&1; then
+		version=$(jq -r '[.[] | .tag_name | select(test("^v[0-9]"))] | .[0] // empty' "$json_file" 2>/dev/null)
+	else
+		version=$(grep -o '"tag_name"[ ]*:[ ]*"v[0-9][^"]*"' "$json_file" \
+			| head -n1 \
+			| sed 's/.*"tag_name"[ ]*:[ ]*"\([^"]*\)".*/\1/')
+	fi
+
+	if is_tailscale_binary_tag "$version"; then
+		echo "$version"
+		return 0
+	fi
+	return 1
+}
+
+# 从 releases 列表取最新 tailscaled 二进制 tag（避免 luci-v* 被标为 latest）
+fetch_latest_binary_tag_from_list() {
+	local prefix="${1:-}"
+	local api_url="${prefix}${CUSTOM_API_PROXY}/${GITHUB_API_RELEASES_LIST_SUFFIX}"
+	local tmp_json="/tmp/github_releases_list.json"
+	local version
+
+	if ! webget "$tmp_json" "$api_url" "echooff"; then
+		return 1
+	fi
+
+	version=$(parse_first_binary_tag_from_list_json "$tmp_json")
+	rm -f "$tmp_json"
+	[ -n "$version" ] && echo "$version" && return 0
+	return 1
+}
+
 fetch_latest_json() {
 	local api_url="$1"
 	local tmp_json_file="/tmp/github_latest_release.json"
-	local json=""
 
 	if ! webget "$tmp_json_file" "$api_url" "echooff"; then
 		return 1
 	fi
 
-	json=$(cat "$tmp_json_file")
+	parse_tag_from_json "$tmp_json_file"
+	local rc=$?
 	rm -f "$tmp_json_file"
-	parse_tag_from_json "$json"
+	return $rc
 }
 
 # 通过 releases/latest 重定向解析版本（不依赖 api.github.com）
 get_latest_version_from_redirect() {
 	local suffix="${GITHUB_RELEASE_REPO}/releases/latest/download/SHA256SUMS.txt"
-	local mirror_list resolved effective version
+	local mirror_list effective version
 
 	try_redirect() {
 		local prefix="$1"
@@ -60,7 +89,7 @@ get_latest_version_from_redirect() {
 
 		effective=$(webget_effective_url "${prefix}https://github.com/${suffix}") || return 1
 		version=$(parse_release_tag_from_url "$effective")
-		if valid_release_tag "$version"; then
+		if is_tailscale_binary_tag "$version"; then
 			log_info "🔗  ${label}: $version"
 			echo "$version"
 			return 0
@@ -69,6 +98,8 @@ get_latest_version_from_redirect() {
 	}
 
 	try_redirect "" "Release 重定向解析版本" && return 0
+
+	[ "$GITHUB_DIRECT" = "true" ] && return 1
 
 	mirror_list=$(resolve_mirror_list "$MIRROR_LIST")
 	if [ -n "$mirror_list" ] && [ -f "$mirror_list" ]; then
@@ -82,11 +113,17 @@ get_latest_version_from_redirect() {
 	return 1
 }
 
-# 获取最新版本：API → Release 重定向 → API 镜像 → release.conf 回退
+# 获取最新 tailscaled 版本：列表 API → latest API → 重定向 →（非直连时）镜像 → release.conf
 get_latest_version() {
 	local mirror_list
 	local api_url="${CUSTOM_API_PROXY}/${GITHUB_API_LATEST_RELEASE_URL_SUFFIX}"
 	local version=""
+
+	version=$(fetch_latest_binary_tag_from_list) && {
+		log_info "📦  最新 tailscaled: $version"
+		echo "$version"
+		return 0
+	}
 
 	version=$(fetch_latest_json "$api_url") && {
 		echo "$version"
@@ -98,28 +135,39 @@ get_latest_version() {
 		return 0
 	}
 
-	mirror_list=$(resolve_mirror_list "$MIRROR_LIST")
-	if [ -n "$mirror_list" ] && [ -f "$mirror_list" ]; then
-		while read -r mirror; do
-			mirror=$(echo "$mirror" | sed 's|#.*||; s/^[[:space:]]*//; s/[[:space:]]*$//')
-			[ -z "$mirror" ] && continue
-			mirror=$(echo "$mirror" | sed 's|/*$|/|')
-			api_url="${mirror}https://api.github.com/${GITHUB_API_LATEST_RELEASE_URL_SUFFIX}"
-			log_info "🔗  尝试 API 镜像: $api_url"
-			version=$(fetch_latest_json "$api_url") && {
-				echo "$version"
-				return 0
-			}
-		done < "$mirror_list"
+	if [ "$GITHUB_DIRECT" != "true" ]; then
+		mirror_list=$(resolve_mirror_list "$MIRROR_LIST")
+		if [ -n "$mirror_list" ] && [ -f "$mirror_list" ]; then
+			while read -r mirror; do
+				mirror=$(echo "$mirror" | sed 's|#.*||; s/^[[:space:]]*//; s/[[:space:]]*$//')
+				[ -z "$mirror" ] && continue
+				mirror=$(echo "$mirror" | sed 's|/*$|/|')
+				log_info "🔗  尝试 releases 列表镜像: ${mirror}https://api.github.com/${GITHUB_API_RELEASES_LIST_SUFFIX}"
+				version=$(fetch_latest_binary_tag_from_list "$mirror") && {
+					echo "$version"
+					return 0
+				}
+				api_url="${mirror}https://api.github.com/${GITHUB_API_LATEST_RELEASE_URL_SUFFIX}"
+				log_info "🔗  尝试 API 镜像: $api_url"
+				version=$(fetch_latest_json "$api_url") && {
+					echo "$version"
+					return 0
+				}
+			done < "$mirror_list"
+		fi
 	fi
 
-	if [ -n "${DEFAULT_RELEASE_VERSION:-}" ] && valid_release_tag "$DEFAULT_RELEASE_VERSION"; then
+	if [ -n "${DEFAULT_RELEASE_VERSION:-}" ] && is_tailscale_binary_tag "$DEFAULT_RELEASE_VERSION"; then
 		log_warn "⚠️  在线获取版本失败，使用 release.conf 指定版本: $DEFAULT_RELEASE_VERSION"
 		echo "$DEFAULT_RELEASE_VERSION"
 		return 0
 	fi
 
-	log_error "❌  错误：无法在线获取版本（GitHub API / 重定向 / 镜像均失败）"
+	if [ "$GITHUB_DIRECT" = "true" ]; then
+		log_error "❌  错误：GitHub 直连无法解析 tailscaled 版本（仓库 latest 可能为 luci 包，请检查 release.conf 或网络）"
+	else
+		log_error "❌  错误：无法在线获取版本（GitHub / 镜像均失败）"
+	fi
 	return 1
 }
 
@@ -239,7 +287,7 @@ if [ "$VERSION" = "latest" ]; then
     while [ $retry -lt $max_retry ]; do
         candidate=$(get_latest_version)
         rc=$?
-        if [ $rc -eq 0 ] && valid_release_tag "$candidate"; then
+        if [ $rc -eq 0 ] && is_tailscale_binary_tag "$candidate"; then
             VERSION="$candidate"
             break
         fi
@@ -249,7 +297,7 @@ if [ "$VERSION" = "latest" ]; then
         sleep 2
     done
     set -e
-    if ! valid_release_tag "$VERSION"; then
+    if ! is_tailscale_binary_tag "$VERSION"; then
         log_error "❌  无法获取最新版本，已重试 $max_retry 次"
         exit 1
     fi

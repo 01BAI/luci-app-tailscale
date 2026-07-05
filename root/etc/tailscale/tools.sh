@@ -78,6 +78,14 @@ has_default_route() {
 	return 1
 }
 
+# tailscaled 二进制 Release 标签（如 v1.98.8），排除 luci-v* / luci-latest
+is_tailscale_binary_tag() {
+	case "$1" in
+		v[0-9]*) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
 # 安装前网络诊断；设置 NET_INTERNET_OK / NET_HTTPS_OK / NET_GITHUB_OK / NET_MIRROR_OK / NET_USABLE_MIRROR
 diagnose_download_network() {
 	local mirror_list trimmed mirror_tried=0

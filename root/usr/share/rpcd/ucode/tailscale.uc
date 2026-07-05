@@ -263,6 +263,11 @@ function tailscale_cli() {
 	return resolve_cli();
 }
 
+function is_tailscale_binary_tag(tag) {
+	tag = trim('' + (tag || ''));
+	return length(tag) > 0 && match(tag, /^v[0-9]/);
+}
+
 function fetch_github_releases(page) {
 	let repo = read_release_repo();
 	let bases = [ 'https://api.github.com' ];
@@ -278,7 +283,7 @@ function fetch_github_releases(page) {
 			let releases = json(join('', out.stdout));
 			let versions = [];
 			for (let r in releases)
-				if (r?.tag_name)
+				if (is_tailscale_binary_tag(r?.tag_name))
 					push(versions, r.tag_name);
 			if (length(versions) > 0)
 				return { success: true, versions: versions, page: page };
@@ -315,20 +320,22 @@ function get_luci_app_version() {
 
 function get_latest_release() {
 	let repo = read_release_repo();
-	let bases = [ 'https://api.github.com' ];
-	let tmp = '/tmp/tailscale_latest.json';
+	let tmp = '/tmp/tailscale_releases_list.json';
+	let url = `https://api.github.com/repos/${repo}/releases?per_page=30`;
+	let out = exec(`curl -fsSL --connect-timeout 15 -A 'luci-app-tailscale' '${url}' -o '${tmp}' && cat '${tmp}'`);
 
-	for (let base in bases) {
-		let url = `${base}/repos/${repo}/releases/latest`;
-		let out = exec(`curl -fsSL --connect-timeout 15 -A 'luci-app-tailscale' '${url}' -o '${tmp}' && cat '${tmp}'`);
-		if (out.code != 0 || !length(out.stdout))
-			continue;
-		try {
-			let data = json(join('', out.stdout));
-			if (data?.tag_name)
-				return data.tag_name;
-		} catch (e) { /* try next */ }
-	}
+	if (out.code != 0 || !length(out.stdout))
+		return null;
+
+	try {
+		let releases = json(join('', out.stdout));
+		for (let r in releases) {
+			let tag = r?.tag_name;
+			if (is_tailscale_binary_tag(tag))
+				return tag;
+		}
+	} catch (e) { /* ignore */ }
+
 	return null;
 }
 
