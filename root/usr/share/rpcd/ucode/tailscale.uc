@@ -1371,15 +1371,29 @@ methods.set_service_enabled = {
 			return { success: false, message: '请先安装 Tailscale' };
 
 		let action = on ? 'start' : 'stop';
-		if (on)
+		let fw_msg = '';
+
+		if (on) {
 			exec('/etc/init.d/tailscale enable 2>&1');
+			if (access('/etc/tailscale/setup-firewall-lan.sh')) {
+				let fw = exec('/bin/sh /etc/tailscale/setup-firewall-lan.sh 2>&1');
+				fw_msg = join('\n', fw.stdout || []);
+			}
+		} else if (access('/etc/tailscale/setup-firewall-lan.sh')) {
+			let fw = exec('/bin/sh /etc/tailscale/setup-firewall-lan.sh --unregister 2>&1');
+			fw_msg = join('\n', fw.stdout || []);
+		}
 
 		let out = exec(`/etc/init.d/tailscale ${action} 2>&1`);
+		let msg = join('\n', out.stdout || []);
+		if (length(fw_msg))
+			msg = length(msg) ? msg + '\n' + fw_msg : fw_msg;
+
 		return {
 			success: out.code == 0,
 			enabled: on,
 			running: service_running(),
-			message: join('\n', out.stdout || []) || (on ? '已启用' : '已停用')
+			message: length(msg) ? msg : (on ? '已启用' : '已停用')
 		};
 	}
 };
