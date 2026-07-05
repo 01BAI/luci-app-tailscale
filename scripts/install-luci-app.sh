@@ -60,6 +60,14 @@ pkg_install_ipk() {
 	esac
 }
 
+opkg_installed() {
+	opkg list-installed 2>/dev/null | grep -qE "^${1}([0-9-]|$)"
+}
+
+opkg_has_libustream() {
+	opkg list-installed 2>/dev/null | grep -qE '^libustream-(openssl|mbedtls)'
+}
+
 # ---------- 依赖 ----------
 log "更新软件源..."
 case "$PKG_MGR" in
@@ -69,7 +77,7 @@ esac
 
 DEPS="curl ca-bundle kmod-tun"
 if [ "$PKG_MGR" = "opkg" ]; then
-	if ! opkg list-installed 2>/dev/null | grep -qE '^libustream-(openssl|mbedtls)'; then
+	if ! opkg_has_libustream; then
 		DEPS="libustream-openssl $DEPS"
 	fi
 elif [ "$PKG_MGR" = "apk" ]; then
@@ -77,12 +85,22 @@ elif [ "$PKG_MGR" = "apk" ]; then
 fi
 
 for pkg in $DEPS; do
-	if ! command -v "${pkg%%-*}" >/dev/null 2>&1 && \
-	   ! opkg list-installed 2>/dev/null | grep -q "^${pkg} " && \
-	   ! apk info -e "$pkg" >/dev/null 2>&1; then
-		log "安装依赖: $pkg"
-		pkg_install "$pkg" || die "依赖 $pkg 安装失败"
+	if [ "$PKG_MGR" = "opkg" ]; then
+		if [ "$pkg" = "libustream-openssl" ] && opkg_has_libustream; then
+			log "已存在 libustream (openssl/mbedtls)，跳过"
+			continue
+		fi
+		if opkg_installed "$pkg"; then
+			continue
+		fi
+	elif [ "$PKG_MGR" = "apk" ]; then
+		if apk info -e "$pkg" >/dev/null 2>&1; then
+			continue
+		fi
 	fi
+
+	log "安装依赖: $pkg"
+	pkg_install "$pkg" || die "依赖 $pkg 安装失败"
 done
 
 command -v curl >/dev/null 2>&1 || die "curl 不可用"
