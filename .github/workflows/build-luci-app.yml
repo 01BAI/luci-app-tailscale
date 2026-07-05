@@ -19,7 +19,6 @@ on:
 env:
   OPENWRT_VERSION: v24.10.3
   PACKAGE_NAME: luci-app-tailscale
-  TRANSLATION_PKG: tailscale
   SDK_DIR: /home/runner/work/openwrt-sdk
 
 permissions:
@@ -110,17 +109,12 @@ jobs:
         run: |
           {
             echo "CONFIG_PACKAGE_${{ env.PACKAGE_NAME }}=m"
-            echo "CONFIG_PACKAGE_luci-i18n-${{ env.TRANSLATION_PKG }}-zh-cn=m"
-            echo "CONFIG_LUCI_LANG_zh_Hans=y"
           } > .config
           make defconfig
           make "package/${{ env.PACKAGE_NAME }}/compile" V=s -j"$(nproc)"
 
           mkdir -p output_ipk
-          find ./bin/packages -type f \( \
-            -name "${{ env.PACKAGE_NAME }}*.ipk" -o \
-            -name "luci-i18n-${{ env.TRANSLATION_PKG }}-*.ipk" \
-          \) -exec cp {} output_ipk/ \;
+          find ./bin/packages -type f -name "${{ env.PACKAGE_NAME }}*.ipk" -exec cp {} output_ipk/ \;
 
           if [ -z "$(ls -A output_ipk 2>/dev/null)" ]; then
             echo "::error::未找到 ipk 产物"
@@ -172,6 +166,5 @@ jobs:
             ```sh
             # 下载后上传到路由器 /tmp，然后：
             opkg install /tmp/luci-app-tailscale_*.ipk
-            opkg install /tmp/luci-i18n-tailscale-zh-cn_*.ipk
             ```
           files: release-assets/*.ipk

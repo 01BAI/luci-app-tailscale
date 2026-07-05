@@ -41,11 +41,29 @@ ipk 包架构为 **all**，各平台 OpenWrt 路由器通用。从 [GitHub Relea
 | **luci-v***（如 `luci-v1.0.0`） | 正式版 |
 | **luci-latest** | main 分支自动编译的开发版（预发布） |
 
-### 路由器上安装
+### 一键安装（推荐）
 
-1. 在 Release 页面下载两个 ipk：
-   - `luci-app-tailscale_*.ipk`
-   - `luci-i18n-tailscale-zh-cn_*.ipk`（中文界面，可选）
+在 OpenWrt / iStoreOS 路由器 SSH 中执行：
+
+```sh
+curl -fsSL https://github.com/01BAI/luci-app-tailscale/raw/main/scripts/install-luci-app.sh | sh
+```
+
+指定正式版 Release：
+
+```sh
+curl -fsSL https://github.com/01BAI/luci-app-tailscale/raw/main/scripts/install-luci-app.sh | sh -s -- --tag=luci-v1.0.0
+```
+
+脚本会自动：更新软件源 → 安装 `curl` / `ca-bundle` / `kmod-tun` 等依赖 → 从 GitHub Release 下载 ipk → `opkg install`。
+
+安装完成后打开 **VPN → Tailscale**，在页面里安装 Tailscale 二进制并登录。
+
+> 界面文案已内置中文（`overview.js`），无需单独安装语言包。
+
+### 手动安装
+
+1. 在 Release 页面下载 `luci-app-tailscale_*.ipk`
 
 2. 上传到路由器并安装（首次使用 Tailscale 前，请先安装运行依赖）：
 
@@ -55,14 +73,13 @@ opkg update
 opkg install curl ca-bundle kmod-tun
 
 # 本机上传（把 IP 换成你的路由器地址）
-scp luci-app-tailscale_*.ipk luci-i18n-tailscale-zh-cn_*.ipk root@192.168.1.1:/tmp/
+scp luci-app-tailscale_*.ipk root@192.168.1.1:/tmp/
 
 # 路由器上安装 LuCI 插件
 opkg install /tmp/luci-app-tailscale_*.ipk
-opkg install /tmp/luci-i18n-tailscale-zh-cn_*.ipk
 ```
 
-或在 LuCI：**系统 → 软件包 → 上传软件包**，先装主包再装语言包。
+或在 LuCI：**系统 → 软件包 → 上传软件包**，安装主包即可。
 
 安装后在 LuCI：**VPN → Tailscale**。插件会从 `release.conf` 配置的 Release 仓库下载 `tailscaled` 二进制。
 
@@ -128,10 +145,10 @@ luci-app-tailscale/
 │       └── rpcd/
 │           ├── acl.d/luci-app-tailscale.json
 │           └── ucode/tailscale.uc
-├── po/zh_Hans/tailscale.po
 └── scripts/
-    ├── dev-setup.sh          # Linux 下下载 SDK 并链接本包
-    └── deploy-to-router.sh   # 热部署到路由器（推荐 macOS 开发）
+    ├── install-luci-app.sh     # 路由器上一键安装 ipk
+    ├── dev-setup.sh            # Linux 下下载 SDK 并链接本包
+    └── deploy-to-router.sh     # 热部署到路由器（推荐 macOS 开发）
 ```
 
 ### 方式一：路由器热部署（macOS 推荐）
