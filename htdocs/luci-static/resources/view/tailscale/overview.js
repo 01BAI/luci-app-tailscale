@@ -614,6 +614,20 @@ function updateRuntimeSection(self, overview, status, installed) {
 		dom.content(actionEl, installed ? buildRuntimeToggleButton(self, overview) : '');
 }
 
+function formatNetworkCheckError(net) {
+	if (!net)
+		return '网络检测失败，无法下载 Tailscale（RPC 无响应）';
+	const parts = [net.message || '网络检测未通过'];
+	if (net.internet === false)
+		parts.push('外网：不可用');
+	if (net.https === false)
+		parts.push('HTTPS：不可用（需 opkg install ca-bundle curl libustream-mbedtls）');
+	if (net.github === false && net.mirror === false)
+		parts.push('GitHub/镜像：预检未通过');
+	parts.push('SSH 诊断: /etc/tailscale/check_network.sh');
+	return parts.join('\n');
+}
+
 function runTailscaleInstall(version, isInstall) {
 	let pollTimer = null;
 	let pollAttempts = 0;
@@ -701,8 +715,8 @@ function runTailscaleInstall(version, isInstall) {
 
 	statusEl.textContent = '正在检测网络...';
 	return callCheckDownloadNetwork().then(function(net) {
-		if (!net || !net.ok)
-			throw new Error((net && net.message) || '网络检测失败，无法下载 Tailscale');
+		if (!net || (net.ok !== true && net.ok !== 1))
+			throw new Error(formatNetworkCheckError(net));
 		updateLog('网络检测：' + (net.message || '通过') + '\n');
 		statusEl.textContent = isInstall ? '正在启动安装...' : '正在启动更新...';
 		return callRunInstall(version || 'latest');

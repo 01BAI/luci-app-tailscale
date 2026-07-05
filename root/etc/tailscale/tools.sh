@@ -34,6 +34,7 @@ load_proxy_env
 
 # 网络探测超时（秒），短于正式下载
 NET_PROBE_TIMEOUT=8
+NET_PROBE_MAX_MIRRORS=0
 
 # 兼容无 coreutils timeout 的 OpenWrt
 run_curl() {
@@ -79,13 +80,24 @@ has_default_route() {
 
 # 安装前网络诊断；设置 NET_INTERNET_OK / NET_HTTPS_OK / NET_GITHUB_OK / NET_MIRROR_OK / NET_USABLE_MIRROR
 diagnose_download_network() {
-	local mirror_list trimmed
+	local mirror_list trimmed mirror_tried=0
+	local api_suffix="repos/${GITHUB_RELEASE_REPO}/releases/latest"
+
+	if [ "${QUICK_NET_CHECK:-0}" = "1" ]; then
+		NET_PROBE_TIMEOUT=4
+		NET_PROBE_MAX_MIRRORS=2
+	fi
 
 	NET_INTERNET_OK=0
 	NET_HTTPS_OK=0
 	NET_GITHUB_OK=0
 	NET_MIRROR_OK=0
 	NET_USABLE_MIRROR=""
+
+	if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+		log_error "❌  缺少 curl/wget，请执行: opkg install curl ca-bundle"
+		return 1
+	fi
 
 	log_info "▶  检测网络连通性..."
 
@@ -112,11 +124,11 @@ diagnose_download_network() {
 		log_warn "⚠️  请确认: opkg install ca-bundle curl libustream-mbedtls"
 	fi
 
-	if probe_url "https://github.com/"; then
+	if probe_url "https://api.github.com/${api_suffix}" || probe_url "https://github.com/${GITHUB_RELEASE_REPO}/"; then
 		NET_GITHUB_OK=1
-		log_info "✅  GitHub HTTPS 可达"
+		log_info "✅  GitHub API/Release 可达"
 	else
-		log_warn "⚠️  GitHub HTTPS 不可达"
+		log_warn "⚠️  GitHub 直连不可达"
 	fi
 
 	mirror_list=$(resolve_mirror_list "$MIRROR_LIST")
@@ -125,12 +137,15 @@ diagnose_download_network() {
 			trimmed=$(echo "$mirror" | sed 's|#.*||; s/^[[:space:]]*//; s/[[:space:]]*$//')
 			[ -z "$trimmed" ] && continue
 			trimmed=$(echo "$trimmed" | sed 's|/*$|/|')
-			if probe_url "${trimmed}https://github.com/${GITHUB_RELEASE_REPO}/"; then
+			mirror_tried=$((mirror_tried + 1))
+			if probe_url "${trimmed}https://api.github.com/${api_suffix}" \
+				|| probe_url "${trimmed}https://github.com/${GITHUB_RELEASE_REPO}/"; then
 				NET_MIRROR_OK=1
 				NET_USABLE_MIRROR="$trimmed"
 				log_info "✅  GitHub 镜像可用: $trimmed"
 				break
 			fi
+			[ "$NET_PROBE_MAX_MIRRORS" -gt 0 ] && [ "$mirror_tried" -ge "$NET_PROBE_MAX_MIRRORS" ] && break
 		done < "$mirror_list"
 	fi
 
@@ -144,12 +159,8 @@ diagnose_download_network() {
 		return 1
 	fi
 
-	log_error "❌  GitHub 与 /etc/tailscale/proxies.txt 中的镜像均不可达"
-	log_error "❌  请任选其一："
-	log_error "    1) 为路由器配置科学上网 / 透明代理"
-	log_error "    2) 创建 /etc/tailscale/proxy.env 设置 HTTP_PROXY / HTTPS_PROXY"
-	log_error "    3) 编辑 /etc/tailscale/proxies.txt 添加本环境可用的 GitHub 镜像"
-	return 1
+	log_warn "⚠️  GitHub/镜像预检未通过，HTTPS 可用，安装时将依次尝试直连与镜像"
+	return 0
 }
 
 # 架构探测（统一入口）

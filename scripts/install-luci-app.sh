@@ -15,12 +15,13 @@ set -o pipefail 2>/dev/null || true
 
 REPO="01BAI/luci-app-tailscale"
 TAG="luci-latest"
+PKG_NAME="luci-app-tailscale"
 TMP_DIR="/tmp/luci-app-tailscale-install.$$"
 
 log() { echo "[install-luci-app] $*"; }
 die() { log "ERROR: $*"; exit 1; }
 
-SCRIPT_REV="2026.07.05-2"
+SCRIPT_REV="2026.07.05-3"
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -66,22 +67,28 @@ opkg_installed() {
 	opkg list-installed 2>/dev/null | grep -qE "^${1}([0-9-]|$)"
 }
 
+opkg_pkg_installed() {
+	opkg list-installed 2>/dev/null | grep -q "^${1} "
+}
+
 opkg_has_libustream() {
-	# mbedtls 与 openssl 互斥，且 opkg 包名常带日期后缀（如 libustream-mbedtls20201210）
 	if opkg list-installed 2>/dev/null | grep -q 'libustream-mbedtls'; then
 		return 0
 	fi
 	if opkg list-installed 2>/dev/null | grep -q 'libustream-openssl'; then
 		return 0
 	fi
-	# 文件已存在说明已有 HTTPS 流支持（即使 list-installed 格式异常）
 	if [ -f /lib/libustream-ssl.so ]; then
 		return 0
 	fi
 	return 1
 }
 
-# ---------- 依赖 ----------
+apk_installed() {
+	apk info -e "$1" >/dev/null 2>&1
+}
+
+# ---------- 依赖（已存在则跳过） ----------
 log "更新软件源..."
 case "$PKG_MGR" in
 	opkg) opkg update >/dev/null 2>&1 || log "WARN: opkg update 失败，继续尝试安装..." ;;
@@ -100,14 +107,16 @@ fi
 for pkg in $DEPS; do
 	if [ "$PKG_MGR" = "opkg" ]; then
 		if [ "$pkg" = "libustream-openssl" ] && opkg_has_libustream; then
-			log "已存在 libustream (openssl/mbedtls)，跳过"
+			log "依赖已满足，跳过: libustream"
 			continue
 		fi
 		if opkg_installed "$pkg"; then
+			log "依赖已安装，跳过: $pkg"
 			continue
 		fi
 	elif [ "$PKG_MGR" = "apk" ]; then
-		if apk info -e "$pkg" >/dev/null 2>&1; then
+		if apk_installed "$pkg"; then
+			log "依赖已安装，跳过: $pkg"
 			continue
 		fi
 	fi
@@ -130,7 +139,6 @@ if ! curl -fsSL --connect-timeout 20 -A "luci-app-tailscale-install" "$API" -o "
 fi
 
 extract_latest_asset() {
-	# 同一 Release 可能累积多次构建的 ipk，按文件名排序取最新（如 r8 > r7 > r5）
 	local prefix="$1"
 	local url=""
 
@@ -153,21 +161,42 @@ MAIN_URL=$(extract_latest_asset "luci-app-tailscale_" || true)
 [ -n "$MAIN_URL" ] || die "Release 中未找到 luci-app-tailscale_*.ipk，请先确认 GitHub Actions 已发布 ${TAG}"
 
 MAIN_IPK="$TMP_DIR/$(basename "$MAIN_URL")"
-log "下载最新主包: $(basename "$MAIN_IPK") ..."
+log "下载: $(basename "$MAIN_IPK") ..."
 curl -fsSL --connect-timeout 60 -A "luci-app-tailscale-install" "$MAIN_URL" -o "$MAIN_IPK" \
 	|| die "主包下载失败"
 
-# ---------- 安装 ipk ----------
-log "安装 luci-app-tailscale ..."
-pkg_install_ipk "$MAIN_IPK" || die "luci-app-tailscale 安装失败"
+# ---------- 安装 / 覆盖 ipk ----------
+case "$PKG_MGR" in
+	opkg)
+		if opkg_pkg_installed "$PKG_NAME"; then
+			old_ver=$(opkg list-installed "$PKG_NAME" 2>/dev/null | awk '{print $3}')
+			log "已安装 ${PKG_NAME} ${old_ver:-}，将覆盖为最新 ipk ..."
+		fi
+		if ! opkg install --force-reinstall "$MAIN_IPK" 2>/dev/null; then
+			if opkg_pkg_installed "$PKG_NAME"; then
+				log "force-reinstall 不可用，先卸载再安装 ..."
+				opkg remove "$PKG_NAME" || die "卸载旧版 ${PKG_NAME} 失败"
+			fi
+			pkg_install_ipk "$MAIN_IPK" || die "${PKG_NAME} 安装失败"
+		fi
+		;;
+	apk)
+		if apk_installed "$PKG_NAME"; then
+			log "已安装 ${PKG_NAME}，将覆盖为最新 ipk ..."
+		fi
+		apk add --allow-untrusted --force-overwrite "$MAIN_IPK" \
+			|| die "${PKG_NAME} 安装失败"
+		;;
+esac
 
 /etc/init.d/rpcd restart 2>/dev/null || true
+/etc/init.d/uhttpd restart 2>/dev/null || /etc/init.d/nginx restart 2>/dev/null || true
 
 log "完成。"
 log ""
 log "下一步："
-log "  1. 浏览器打开 LuCI → VPN → Tailscale"
+log "  1. 浏览器打开 LuCI → VPN → Tailscale（建议 Ctrl+Shift+R 强制刷新）"
 log "  2. 点击「安装 Tailscale」安装 tailscaled 二进制（需 Release 中有对应架构）"
 log "  3. 登录并完成 tailscale up 设置"
 log ""
-log "Release 标签: ${TAG}  仓库: ${REPO}"
+log "Release 标签: ${TAG}  仓库: ${REPO}  ipk: $(basename "$MAIN_IPK")"

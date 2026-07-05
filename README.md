@@ -88,7 +88,7 @@ curl -fsSL https://raw.githubusercontent.com/01BAI/luci-app-tailscale/main/scrip
 curl -fsSL https://raw.githubusercontent.com/01BAI/luci-app-tailscale/main/scripts/install-luci-app.sh | sh -s -- --tag=luci-v1.0.0
 ```
 
-脚本会自动：更新软件源 → 安装 `curl` / `ca-bundle` / `kmod-tun` 等依赖 → 从 GitHub Release 下载 ipk → `opkg install`。
+脚本会自动：更新软件源 → 安装缺失依赖（已存在则跳过）→ 从 GitHub Release 下载最新 ipk → 覆盖安装 `luci-app-tailscale`（已安装时会 `--force-reinstall` 或先卸载再装）。
 
 安装完成后打开 **VPN → Tailscale**，在页面里安装 Tailscale 二进制并登录。
 

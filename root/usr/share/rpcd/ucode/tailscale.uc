@@ -1078,7 +1078,7 @@ methods.check_download_network = {
 		if (!access(CHECK_NETWORK))
 			return { ok: false, message: '网络检测脚本不存在: ' + CHECK_NETWORK };
 
-		let r = exec(CHECK_NETWORK);
+		let r = exec(CHECK_NETWORK + ' --quick');
 		let kv = parse_keyval_lines(r.stdout || '');
 
 		return {
