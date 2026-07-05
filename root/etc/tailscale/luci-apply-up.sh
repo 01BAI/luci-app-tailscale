@@ -1,5 +1,6 @@
 #!/bin/sh
-# 从 tailscale_up.conf 构建并执行 tailscale up（逻辑对齐 CH3NGYZ tailscale_up_generator.sh）
+# 从 tailscale_up.conf 构建并执行 tailscale up / set
+# 已登录时用 tailscale set（避免 --reset 触发重新登录、丢宣告路由）
 # 用法: luci-apply-up.sh [--dry-run]
 
 CONFIG_DIR="/etc/tailscale"
@@ -32,6 +33,23 @@ resolve_ts_socket() {
 	return 1
 }
 
+ts_cli_base() {
+	local sock=""
+	sock=$(resolve_ts_socket || true)
+	if [ -n "$sock" ]; then
+		echo "$TS_BIN --socket=$sock"
+	else
+		echo "$TS_BIN"
+	fi
+}
+
+ts_backend_state() {
+	local ts_cmd="$1"
+	local state=""
+	state=$($ts_cmd status --json 2>/dev/null | grep -o '"BackendState":"[^"]*"' | head -n1 | sed 's/.*:"//;s/"$//')
+	echo "$state"
+}
+
 valid_exit_node_val() {
 	[ -z "$1" ] && return 1
 	case "$1" in
@@ -47,14 +65,25 @@ should_skip_param() {
 		--exit-node)
 			valid_exit_node_val "$val" || return 0
 			;;
+		--advertise-exit-node|--ssh|--shields-up|--snat-subnet-routes|--exit-node-allow-lan-access)
+			case "$val" in
+				false|False|0|"") return 0 ;;
+			esac
+			;;
 	esac
 	return 1
 }
 
-build_up_cmd() {
-	local cmd="tailscale up --reset"
-	local line key val
+build_apply_cmd() {
+	local mode="$1"
+	local prefix cmd line key val
 
+	case "$mode" in
+		set) prefix="tailscale set" ;;
+		*) prefix="tailscale up --reset" ;;
+	esac
+
+	cmd="$prefix"
 	while IFS= read -r line || [ -n "$line" ]; do
 		line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
 		case "$line" in
@@ -85,18 +114,15 @@ get_conf_advertise_routes() {
 verify_advertise_routes() {
 	local expected="$1"
 	local prefs=""
-	local ts_cmd="$TS_BIN"
+	local ts_cmd
+	ts_cmd=$(ts_cli_base)
 
 	[ -z "$expected" ] && return 0
-
-	SOCK=$(resolve_ts_socket || true)
-	if [ -n "$SOCK" ]; then
-		ts_cmd="$TS_BIN --socket=$SOCK"
-	fi
 
 	prefs=$($ts_cmd debug prefs 2>/dev/null) || prefs=""
 	if echo "$prefs" | grep -F "$expected" >/dev/null 2>&1; then
 		log_info "✅  已宣告子网: $expected"
+		log_info "ℹ️  请在 Tailscale 控制台 Machines → 本机 → Subnets 中批准该路由"
 		return 0
 	fi
 
@@ -104,12 +130,19 @@ verify_advertise_routes() {
 	if echo "$prefs" | grep -i AdvertiseRoutes >/dev/null 2>&1; then
 		log_warn "⚠️  当前 AdvertiseRoutes: $(echo "$prefs" | grep -i AdvertiseRoutes | head -n1)"
 	fi
-	log_warn "⚠️  请检查上方 tailscale up 是否报错，或手动执行: /etc/tailscale/luci-apply-up.sh --dry-run"
+	log_warn "⚠️  若 debug prefs 为 null，请先 tailscale status 确认已登录，再重试"
 	return 1
 }
 
-cmd=$(build_up_cmd)
-if [ -z "$cmd" ] || [ "$cmd" = "tailscale up" ] || [ "$cmd" = "tailscale up --reset" ]; then
+TS_CMD=$(ts_cli_base)
+STATE=$(ts_backend_state "$TS_CMD")
+APPLY_MODE="up"
+case "$STATE" in
+	Running|Starting) APPLY_MODE="set" ;;
+esac
+
+cmd=$(build_apply_cmd "$APPLY_MODE")
+if [ -z "$cmd" ] || [ "$cmd" = "tailscale up" ] || [ "$cmd" = "tailscale up --reset" ] || [ "$cmd" = "tailscale set" ]; then
 	log_error "❌  tailscale_up.conf 中无有效参数"
 	exit 1
 fi
@@ -119,14 +152,14 @@ if [ "$DRY_RUN" -eq 1 ]; then
 	exit 0
 fi
 
-SOCK=$(resolve_ts_socket || true)
-if [ -n "$SOCK" ]; then
-	cmd=$(echo "$cmd" | sed "s|^tailscale |$TS_BIN --socket=$SOCK |")
-else
-	cmd=$(echo "$cmd" | sed "s|^tailscale |$TS_BIN |")
-fi
+cmd=$(echo "$cmd" | sed "s|^tailscale |$TS_CMD |")
 
 : > "$APPLY_LOG"
+if [ "$APPLY_MODE" = "set" ]; then
+	log_info "ℹ️  已登录 (${STATE})，使用 tailscale set 应用配置（不 --reset）"
+else
+	log_info "ℹ️  尚未登录 (${STATE:-unknown})，使用 tailscale up --reset"
+fi
 log_info "🚀  正在执行: $cmd"
 # shellcheck disable=SC2086
 eval "$cmd" >>"$APPLY_LOG" 2>&1
@@ -134,10 +167,14 @@ rc=$?
 
 cat "$APPLY_LOG"
 
+if grep -qi 'To authenticate, visit' "$APPLY_LOG" 2>/dev/null; then
+	log_warn "⚠️  输出含登录链接：请先完成 Tailscale 登录，再保存并应用连接设置"
+fi
+
 if [ "$rc" -ne 0 ]; then
-	log_error "❌  tailscale up 失败 (exit $rc)，子网不会推送到控制面板"
+	log_error "❌  tailscale 应用失败 (exit $rc)"
 	if grep -q 'non-default flags' "$APPLY_LOG" 2>/dev/null; then
-		log_error "❌  本地已有非默认参数且与命令不一致，请确认已部署最新 luci-apply-up.sh（含 --reset）"
+		log_error "❌  本地已有非默认参数且与命令不一致，请确认已部署最新 luci-apply-up.sh"
 	fi
 	exit "$rc"
 fi

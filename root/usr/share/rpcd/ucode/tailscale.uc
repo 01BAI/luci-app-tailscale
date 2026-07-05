@@ -450,10 +450,14 @@ function build_up_command(settings, opts) {
 		if (name == 'exit_node' && !valid_exit_node(val))
 			continue;
 
-		if (typ == 'flag')
-			push(parts, cli_key + '=' + (setting_true(val) ? 'true' : 'false'));
-		else
+		if (typ == 'flag') {
+			if (name == 'accept_routes')
+				push(parts, cli_key + '=' + (setting_true(val) ? 'true' : 'false'));
+			else if (setting_true(val))
+				push(parts, cli_key + '=true');
+		} else {
 			push(parts, cli_key + '=' + val);
+		}
 	}
 
 	return join(' ', parts);
