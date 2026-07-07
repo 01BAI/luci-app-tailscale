@@ -143,6 +143,19 @@ jobs:
     needs: build
     if: github.event_name != 'pull_request'
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Read version metadata
+        run: |
+          BASE_VER="$(tr -d '[:space:]' < VERSION)"
+          BUILD_NUM="$(tr -d '[:space:]' < BUILD)"
+          echo "BASE_VER=${BASE_VER}" >> "$GITHUB_ENV"
+          echo "BUILD_NUM=${BUILD_NUM}" >> "$GITHUB_ENV"
+          echo "FULL_VER=${BASE_VER} build${BUILD_NUM}" >> "$GITHUB_ENV"
+
       - name: Download artifact
         uses: actions/download-artifact@v4
         with:
@@ -156,6 +169,7 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: luci-app-tailscale ${{ github.ref_name }} (build${{ env.BUILD_NUM }})
           generate_release_notes: true
+          replace_assets: true
           body: |
             **完整版本**: v${{ env.BASE_VER }} build${{ env.BUILD_NUM }}
 
