@@ -6,7 +6,7 @@
 'require dom';
 
 /* 热部署后改此版本号，强制浏览器刷新 CSS/JS */
-const UI_REV = '1.0.1 build26070702';
+const UI_REV = '1.0.1 build26070703';
 const CSS_REV = '20260707-1';
 
 const SETTINGS_FIELDS = [
@@ -29,7 +29,6 @@ const callGetOverview = rpc.declare({ object: 'tailscale', method: 'get_overview
 const callGetStatus = rpc.declare({ object: 'tailscale', method: 'get_status' });
 const callRunInstall = rpc.declare({ object: 'tailscale', method: 'run_install', params: [ 'version' ] });
 const callGetInstallProgress = rpc.declare({ object: 'tailscale', method: 'get_install_progress' });
-const callCheckDownloadNetwork = rpc.declare({ object: 'tailscale', method: 'check_download_network' });
 const callRunUninstall = rpc.declare({ object: 'tailscale', method: 'run_uninstall' });
 const callCheckUpdates = rpc.declare({ object: 'tailscale', method: 'check_updates', timeout: 45 });
 const callRunLuciUpdate = rpc.declare({ object: 'tailscale', method: 'run_luci_update', params: [ 'tag' ] });
@@ -798,22 +797,6 @@ function runLuciAppUpdate(tag) {
 	});
 }
 
-function formatNetworkCheckError(net) {
-	if (!net)
-		return '网络检测失败，无法下载 Tailscale（RPC 无响应）';
-	if (net.message && net.message != '网络检测失败')
-		return net.message;
-	const parts = [net.message || '网络检测未通过'];
-	if (net.internet === false)
-		parts.push('外网：不可用');
-	if (net.https === false)
-		parts.push('HTTPS：不可用（需 opkg install ca-bundle curl libustream-mbedtls）');
-	if (net.github === false && net.mirror === false)
-		parts.push('GitHub/镜像：预检未通过');
-	parts.push('SSH 诊断: /etc/tailscale/check_network.sh --quick');
-	return parts.join('\n');
-}
-
 function runTailscaleInstall(version, isInstall) {
 	let pollTimer = null;
 	let pollAttempts = 0;
@@ -899,14 +882,14 @@ function runTailscaleInstall(version, isInstall) {
 		});
 	}
 
-	statusEl.textContent = '正在检测网络...';
-	return callCheckDownloadNetwork().then(function(net) {
-		if (!net || (net.ok !== true && net.ok !== 1))
-			throw new Error(formatNetworkCheckError(net));
-		updateLog('网络检测：' + (net.message || '通过') + '\n');
-		statusEl.textContent = isInstall ? '正在启动安装...' : '正在启动更新...';
-		return callRunInstall(version || 'latest');
-	}).then(function(res) {
+	/*
+	 * 不再前置同步调用 check_download_network：它会阻塞 ~40s 导致 XHR 超时，
+	 * 且日志被丢弃看不到过程。网络检测已在后台安装脚本(luci-install.sh)内执行，
+	 * 其逐步日志会写入安装日志并由 pollProgress 实时显示。
+	 */
+	statusEl.className = 'spinning';
+	statusEl.textContent = isInstall ? '正在启动安装...' : '正在启动更新...';
+	return callRunInstall(version || 'latest').then(function(res) {
 		if (!res || res.success === false)
 			throw new Error((res && res.message) || '无法启动安装');
 		updateLog('');

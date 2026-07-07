@@ -419,12 +419,23 @@ function parse_luci_build_from_release(release) {
 	if (release == null)
 		return '';
 
+	let best = 0;
+	let best_str = '';
+
 	for (let a in (release.assets || [])) {
 		let name = trim('' + (a?.name || ''));
 		let m = match(name, /^luci-app-tailscale_[^-]+-r([0-9]+)_all\.ipk$/);
-		if (m)
-			return m[1];
+		if (m) {
+			let n = luci_build_number(m[1]);
+			if (n > best) {
+				best = n;
+				best_str = m[1];
+			}
+		}
 	}
+
+	if (length(best_str))
+		return best_str;
 
 	let body = trim('' + (release?.body || ''));
 	let m2 = match(body, /build([0-9]{8,})/i);
