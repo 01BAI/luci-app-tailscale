@@ -12,8 +12,9 @@ TAG="${1:-}"
 
 REPO="${GITHUB_RELEASE_REPO:-01BAI/luci-app-tailscale}"
 TMP_DIR="/tmp/luci-app-update.$$"
+JSON="$TMP_DIR/release.json"
 BUILTIN_MIRRORS="https://ghfast.top/ https://ghproxy.net/ https://gh-proxy.com/"
-SCRIPT_REV="2026.07.05-1"
+SCRIPT_REV="2026.07.07-1"
 
 cleanup() { rm -rf "$TMP_DIR"; }
 trap cleanup EXIT INT TERM
@@ -28,8 +29,84 @@ case "$TAG" in
 esac
 
 curl_fetch() {
-	curl -fsSL --globoff --connect-timeout 20 --max-time 120 \
+	curl -fsSL --http1.1 --globoff --connect-timeout 20 --max-time 120 \
 		-A "luci-app-tailscale-update/${SCRIPT_REV}" "$1" -o "$2" 2>/dev/null
+}
+
+curl_probe() {
+	curl -fsSL --http1.1 --globoff --connect-timeout 15 --max-time 30 \
+		-A "luci-app-tailscale-update/${SCRIPT_REV}" \
+		-r 0-0 "$1" -o /dev/null 2>/dev/null
+}
+
+list_mirror_prefixes() {
+	if [ -f "$CONFIG_DIR/proxies.txt" ]; then
+		while read -r mirror; do
+			mirror=$(echo "$mirror" | sed 's|#.*||; s/^[[:space:]]*//; s/[[:space:]]*$//')
+			[ -z "$mirror" ] && continue
+			echo "$mirror" | sed 's|/*$|/|'
+		done < "$CONFIG_DIR/proxies.txt"
+	fi
+	for mirror in $BUILTIN_MIRRORS; do
+		echo "$mirror"
+	done
+}
+
+curl_download() {
+	local url="$1"
+	local out="$2"
+	local github_path mirror
+
+	if curl -fsSL --http1.1 --globoff --connect-timeout 60 --max-time 300 \
+		-A "luci-app-tailscale-update/${SCRIPT_REV}" \
+		"$url" -o "$out" 2>/dev/null; then
+		return 0
+	fi
+
+	case "$url" in
+		https://github.com/*) github_path="${url#https://github.com/}" ;;
+		*) return 1 ;;
+	esac
+
+	for mirror in $(list_mirror_prefixes); do
+		log_warn "⚠️  直连下载失败，尝试镜像: ${mirror}"
+		if curl -fsSL --http1.1 --globoff --connect-timeout 60 --max-time 300 \
+			-A "luci-app-tailscale-update/${SCRIPT_REV}" \
+			"${mirror}https://github.com/${github_path}" -o "$out" 2>/dev/null; then
+			return 0
+		fi
+	done
+	return 1
+}
+
+fetch_release_json() {
+	local api_path="repos/${REPO}/releases/tags/${TAG}"
+	local mirror url
+
+	if curl_fetch "https://api.github.com/${api_path}" "$JSON"; then
+		return 0
+	fi
+
+	for mirror in $(list_mirror_prefixes); do
+		url="${mirror}https://api.github.com/${api_path}"
+		if curl_fetch "$url" "$JSON"; then
+			return 0
+		fi
+	done
+	return 1
+}
+
+extract_latest_asset() {
+	local url=""
+
+	[ -s "$JSON" ] || return 1
+
+	url=$(grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*luci-app-tailscale_[^"]*"' "$JSON" \
+		| sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' \
+		| sort -V | tail -n1)
+
+	[ -n "$url" ] || return 1
+	echo "$url"
 }
 
 try_direct_ipk() {
@@ -39,9 +116,7 @@ try_direct_ipk() {
 	for r in 1 2 3 4 5; do
 		path="${REPO}/releases/download/${TAG}/luci-app-tailscale_${VER}-r${r}_all.ipk"
 		url="${mirror_prefix}https://github.com/${path}"
-		if curl -fsSL --globoff --connect-timeout 15 --max-time 30 \
-			-A "luci-app-tailscale-update/${SCRIPT_REV}" \
-			-r 0-0 "$url" -o /dev/null 2>/dev/null; then
+		if curl_probe "$url"; then
 			echo "$url"
 			return 0
 		fi
@@ -52,20 +127,15 @@ try_direct_ipk() {
 resolve_ipk_url() {
 	local url mirror
 
+	if fetch_release_json; then
+		url=$(extract_latest_asset || true)
+		[ -n "$url" ] && { echo "$url"; return 0; }
+	fi
+
 	url=$(try_direct_ipk "" || true)
 	[ -n "$url" ] && { echo "$url"; return 0; }
 
-	if [ -f "$CONFIG_DIR/proxies.txt" ]; then
-		while read -r mirror; do
-			mirror=$(echo "$mirror" | sed 's|#.*||; s/^[[:space:]]*//; s/[[:space:]]*$//')
-			[ -z "$mirror" ] && continue
-			mirror=$(echo "$mirror" | sed 's|/*$|/|')
-			url=$(try_direct_ipk "$mirror" || true)
-			[ -n "$url" ] && { echo "$url"; return 0; }
-		done < "$CONFIG_DIR/proxies.txt"
-	fi
-
-	for mirror in $BUILTIN_MIRRORS; do
+	for mirror in $(list_mirror_prefixes); do
 		url=$(try_direct_ipk "$mirror" || true)
 		[ -n "$url" ] && { echo "$url"; return 0; }
 	done
@@ -78,7 +148,7 @@ MAIN_URL=$(resolve_ipk_url) || exit 1
 MAIN_IPK="$TMP_DIR/$(basename "$MAIN_URL")"
 
 log_info "📦  下载插件: $(basename "$MAIN_IPK")"
-curl_fetch "$MAIN_URL" "$MAIN_IPK" || { log_error "❌  下载失败"; exit 1; }
+curl_download "$MAIN_URL" "$MAIN_IPK" || { log_error "❌  下载失败（已尝试 HTTP/1.1 与镜像）"; exit 1; }
 
 log_info "📦  安装 ipk..."
 if ! opkg install --force-reinstall "$MAIN_IPK" 2>/dev/null; then

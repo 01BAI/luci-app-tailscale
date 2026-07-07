@@ -21,7 +21,7 @@ TMP_DIR="/tmp/luci-app-tailscale-install.$$"
 log() { echo "[install-luci-app] $*" >&2; }
 die() { log "ERROR: $*"; exit 1; }
 
-SCRIPT_REV="2026.07.05-6"
+SCRIPT_REV="2026.07.07-1"
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -136,10 +136,58 @@ BUILTIN_API_MIRRORS="https://ghfast.top/ https://ghproxy.net/ https://gh-proxy.c
 curl_fetch() {
 	local url="$1"
 	local out="$2"
-	curl -fsSL --globoff --connect-timeout 20 --max-time 90 \
+	curl -fsSL --http1.1 --globoff --connect-timeout 20 --max-time 90 \
 		-A "luci-app-tailscale-install/${SCRIPT_REV}" \
 		-H "Accept: application/vnd.github+json" \
 		"$url" -o "$out" 2>/dev/null
+}
+
+curl_probe() {
+	local url="$1"
+	curl -fsSL --http1.1 --globoff --connect-timeout 15 --max-time 30 \
+		-A "luci-app-tailscale-install/${SCRIPT_REV}" \
+		-r 0-0 "$url" -o /dev/null 2>/dev/null
+}
+
+list_mirror_prefixes() {
+	if [ -f /etc/tailscale/proxies.txt ]; then
+		while read -r mirror; do
+			mirror=$(echo "$mirror" | sed 's|#.*||; s/^[[:space:]]*//; s/[[:space:]]*$//')
+			[ -z "$mirror" ] && continue
+			echo "$mirror" | sed 's|/*$|/|'
+		done < /etc/tailscale/proxies.txt
+	fi
+	for mirror in $BUILTIN_API_MIRRORS; do
+		echo "$mirror"
+	done
+}
+
+# 下载文件：优先 HTTP/1.1，失败则换镜像重试
+curl_download() {
+	local url="$1"
+	local out="$2"
+	local github_path mirror
+
+	if curl -fsSL --http1.1 --globoff --connect-timeout 60 --max-time 300 \
+		-A "luci-app-tailscale-install/${SCRIPT_REV}" \
+		"$url" -o "$out" 2>/dev/null; then
+		return 0
+	fi
+
+	case "$url" in
+		https://github.com/*) github_path="${url#https://github.com/}" ;;
+		*) return 1 ;;
+	esac
+
+	for mirror in $(list_mirror_prefixes); do
+		log "WARN: 直连下载失败，尝试镜像: ${mirror}"
+		if curl -fsSL --http1.1 --globoff --connect-timeout 60 --max-time 300 \
+			-A "luci-app-tailscale-install/${SCRIPT_REV}" \
+			"${mirror}https://github.com/${github_path}" -o "$out" 2>/dev/null; then
+			return 0
+		fi
+	done
+	return 1
 }
 
 url_looks_valid() {
@@ -162,9 +210,7 @@ try_direct_tag_ipk_urls() {
 	for r in 1 2 3 4 5; do
 		path="${REPO}/releases/download/${TAG}/luci-app-tailscale_${ver}-r${r}_all.ipk"
 		url="${mirror_prefix}https://github.com/${path}"
-		if curl -fsSL --globoff --connect-timeout 15 --max-time 30 \
-			-A "luci-app-tailscale-install/${SCRIPT_REV}" \
-			-r 0-0 "$url" -o /dev/null 2>/dev/null; then
+		if curl_probe "$url"; then
 			echo "$url"
 			return 0
 		fi
@@ -238,7 +284,7 @@ scrape_ipk_url_from_release_page() {
 	page="${mirror_prefix}https://github.com/${REPO}/releases/expanded_assets/${TAG}"
 	html="$TMP_DIR/release_page.html"
 
-	curl -fsSL --globoff --connect-timeout 20 --max-time 90 \
+	curl -fsSL --http1.1 --globoff --connect-timeout 20 --max-time 90 \
 		-A "luci-app-tailscale-install/${SCRIPT_REV}" \
 		"$page" -o "$html" 2>/dev/null || return 1
 
@@ -256,7 +302,17 @@ scrape_ipk_url_from_release_page() {
 resolve_main_ipk_url() {
 	local url="" mirror
 
-	# 1. 正式版 tag：直连 github.com 下载（不走 API，避免 403 限流）
+	# 1. GitHub API 取资产列表（支持 build 号如 r26070701）
+	if fetch_release_json; then
+		url=$(extract_latest_asset "luci-app-tailscale_" || true)
+	fi
+	if url_looks_valid "$url"; then
+		log "使用 Release 资产: $(basename "$url")"
+		echo "$url"
+		return 0
+	fi
+
+	# 2. 正式版 tag 直链探测（兼容旧 r1、r2…）
 	url=$(try_direct_tag_ipk_urls "" || true)
 	if url_looks_valid "$url"; then
 		log "使用 Release 直链: $(basename "$url")"
@@ -264,26 +320,15 @@ resolve_main_ipk_url() {
 		return 0
 	fi
 
-	# 2. GitHub API（含镜像）
-	if fetch_release_json; then
-		url=$(extract_latest_asset "luci-app-tailscale_" || true)
-	fi
-	if url_looks_valid "$url"; then
-		echo "$url"
-		return 0
-	fi
-
 	# 3. Release 页面解析
-	if [ -z "$url" ]; then
-		log "WARN: API 不可用，尝试 GitHub Release 页面解析 ipk..."
-		url=$(scrape_ipk_url_from_release_page "" || true)
-	fi
+	log "WARN: API 不可用，尝试 GitHub Release 页面解析 ipk..."
+	url=$(scrape_ipk_url_from_release_page "" || true)
 	if url_looks_valid "$url"; then
 		echo "$url"
 		return 0
 	fi
 
-	# 4. 镜像：直链 → 页面
+	# 4. 镜像：直链 / 页面（下载阶段 curl_download 还会再试镜像）
 	for mirror in $BUILTIN_API_MIRRORS; do
 		url=$(try_direct_tag_ipk_urls "$mirror" || true)
 		if url_looks_valid "$url"; then
@@ -307,10 +352,7 @@ url_looks_valid "$MAIN_URL" || die "解析到的下载地址无效"
 
 MAIN_IPK="$TMP_DIR/$(basename "$MAIN_URL")"
 log "下载: $(basename "$MAIN_IPK") ..."
-curl -fsSL --globoff --connect-timeout 60 --max-time 300 \
-	-A "luci-app-tailscale-install/${SCRIPT_REV}" \
-	"$MAIN_URL" -o "$MAIN_IPK" \
-	|| die "主包下载失败"
+curl_download "$MAIN_URL" "$MAIN_IPK" || die "主包下载失败（已尝试 HTTP/1.1 与镜像）"
 
 # ---------- 安装 / 覆盖 ipk ----------
 case "$PKG_MGR" in

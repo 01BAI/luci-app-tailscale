@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-tailscale
 PKG_VERSION:=$(shell cat $(CURDIR)/VERSION 2>/dev/null || echo 1.0.0)
-PKG_RELEASE:=1
+PKG_RELEASE:=$(shell cat $(CURDIR)/BUILD 2>/dev/null || echo 1)
 LUCI_TITLE:=LuCI support for Tailscale
 LUCI_DESCRIPTION:=LuCI web UI to install and manage Tailscale on OpenWrt (own GitHub Release binaries).
 PKG_MAINTAINER:=Lou <lou@example.com>

@@ -45,8 +45,18 @@ ts_cli_base() {
 
 ts_backend_state() {
 	local ts_cmd="$1"
-	local state=""
-	state=$($ts_cmd status --json 2>/dev/null | grep -o '"BackendState":"[^"]*"' | head -n1 | sed 's/.*:"//;s/"$//')
+	local json state=""
+	json=$($ts_cmd status --json 2>/dev/null)
+	[ -z "$json" ] && return 0
+
+	# tailscale status --json 为美化输出（冒号后带空格），需兼容空格
+	if command -v jsonfilter >/dev/null 2>&1; then
+		state=$(echo "$json" | jsonfilter -e '@.BackendState' 2>/dev/null)
+	fi
+	[ -z "$state" ] && state=$(echo "$json" \
+		| grep -o '"BackendState"[[:space:]]*:[[:space:]]*"[^"]*"' \
+		| head -n1 \
+		| sed 's/.*"BackendState"[[:space:]]*:[[:space:]]*"//; s/"$//')
 	echo "$state"
 }
 

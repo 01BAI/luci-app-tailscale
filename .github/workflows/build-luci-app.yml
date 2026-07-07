@@ -90,9 +90,16 @@ jobs:
 
           bash "${{ github.workspace }}/scripts/sync-version.sh"
 
+          BASE_VER="$(tr -d '[:space:]' < "${{ github.workspace }}/VERSION")"
+          BUILD_NUM="$(tr -d '[:space:]' < "${{ github.workspace }}/BUILD")"
+          FULL_VER="${BASE_VER} build${BUILD_NUM}"
+          echo "BASE_VER=${BASE_VER}" >> "$GITHUB_ENV"
+          echo "BUILD_NUM=${BUILD_NUM}" >> "$GITHUB_ENV"
+          echo "FULL_VER=${FULL_VER}" >> "$GITHUB_ENV"
+
           if [ "${{ github.ref_type }}" = "tag" ]; then
-            NEW_VER="$(echo "${{ github.ref_name }}" | sed 's/^luci-v//')"
-            NEW_REL="1"
+            NEW_VER="${BASE_VER}"
+            NEW_REL="${BUILD_NUM}"
           else
             NEW_VER="$(date +'%Y.%m.%d')"
             SHORT_SHA="$(git -C "${{ github.workspace }}" rev-parse --short HEAD)"
@@ -100,7 +107,7 @@ jobs:
           fi
           sed -i "s/^PKG_VERSION:=.*/PKG_VERSION:=${NEW_VER}/" "$TARGET_MK"
           sed -i "s/^PKG_RELEASE:=.*/PKG_RELEASE:=${NEW_REL}/" "$TARGET_MK"
-          echo "PKG_VERSION=${NEW_VER} PKG_RELEASE=${NEW_REL}"
+          echo "PKG_VERSION=${NEW_VER} PKG_RELEASE=${NEW_REL} (${FULL_VER})"
 
           rm -rf output_ipk
           find ./bin -type f -name "${{ env.PACKAGE_NAME }}*.ipk" -delete 2>/dev/null || true
@@ -147,8 +154,18 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: luci-app-tailscale ${{ github.ref_name }}
+          name: luci-app-tailscale ${{ github.ref_name }} (build${{ env.BUILD_NUM }})
           generate_release_notes: true
+          body: |
+            **完整版本**: v${{ env.BASE_VER }} build${{ env.BUILD_NUM }}
+
+            **ipk**: `luci-app-tailscale_${{ env.BASE_VER }}-r${{ env.BUILD_NUM }}_all.ipk`
+
+            ```sh
+            curl --http1.1 -fL -o /tmp/luci-app-tailscale.ipk \
+              https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/luci-app-tailscale_${{ env.BASE_VER }}-r${{ env.BUILD_NUM }}_all.ipk
+            opkg install --force-reinstall /tmp/luci-app-tailscale.ipk
+            ```
           files: release-assets/*.ipk
 
       - name: Publish latest pre-release (main)

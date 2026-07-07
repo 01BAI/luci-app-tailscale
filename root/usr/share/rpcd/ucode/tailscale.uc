@@ -391,6 +391,81 @@ function normalize_version(ver) {
 	return ver;
 }
 
+function luci_build_number(build) {
+	build = trim(build || '');
+	if (!length(build))
+		return 0;
+	let n = int(build);
+	return n != null ? n : 0;
+}
+
+function parse_luci_app_version(ver) {
+	ver = trim(ver || '');
+	let m = match(ver, /^v?([0-9]+(?:\.[0-9]+)*)(?:[[:space:]]+build([0-9]+))?$/i);
+	if (!m) {
+		let base = normalize_version(ver);
+		return { base: base, build: '', display: base };
+	}
+	let base = m[1];
+	let build = m[2] || '';
+	let display = length(build) ? `${base} build${build}` : base;
+	return { base: base, build: build, display: display };
+}
+
+function parse_luci_build_from_release(release) {
+	if (release == null)
+		return '';
+
+	for (let a in (release.assets || [])) {
+		let name = trim('' + (a?.name || ''));
+		let m = match(name, /^luci-app-tailscale_[^-]+-r([0-9]+)_all\.ipk$/);
+		if (m)
+			return m[1];
+	}
+
+	let body = trim('' + (release?.body || ''));
+	let m2 = match(body, /build([0-9]{8,})/i);
+	if (m2)
+		return m2[1];
+
+	return '';
+}
+
+function find_release_by_tag(json_text, tag) {
+	if (json_text == null || !length(tag))
+		return null;
+
+	try {
+		let releases = json(json_text);
+		for (let r in releases) {
+			if (trim('' + (r?.tag_name || '')) == tag)
+				return r;
+		}
+	} catch (e) { /* ignore */ }
+
+	return null;
+}
+
+function luci_app_has_update(current, latest_base, latest_build) {
+	let cur = parse_luci_app_version(current);
+	let cur_base = normalize_version(cur.base);
+	let lat_base = normalize_version(latest_base);
+
+	if (cur_base != lat_base)
+		return cur_base < lat_base;
+
+	return luci_build_number(cur.build) < luci_build_number(latest_build);
+}
+
+function format_luci_app_display(base, build) {
+	base = normalize_version(base || '');
+	if (!length(base))
+		return '';
+	if (!length(build))
+		return base;
+	return `${base} build${build}`;
+}
+
 function get_installed_version() {
 	if (access(VERSION_FILE)) {
 		let v = trim(readfile(VERSION_FILE) || '');
@@ -1178,23 +1253,26 @@ methods.check_updates = {
 		let ts_current = get_installed_version();
 		let ts_installed = is_installed();
 		let json_text = fetch_releases_json_text();
-		let luci_latest = latest_luci_tag_from_releases(json_text);
+		let luci_latest_tag = latest_luci_tag_from_releases(json_text);
+		let luci_release = luci_latest_tag ? find_release_by_tag(json_text, luci_latest_tag) : null;
+		let luci_latest_base = luci_latest_tag ? normalize_version(substr(luci_latest_tag, 6)) : '';
+		let luci_latest_build = parse_luci_build_from_release(luci_release);
+		let luci_latest_display = format_luci_app_display(luci_latest_base, luci_latest_build);
 		let ts_latest = latest_binary_tag_from_releases(json_text);
 
 		let plugin = {
 			current: luci_current,
-			latest: luci_latest || '',
-			latest_tag: luci_latest || '',
+			latest: luci_latest_display || luci_latest_base || '',
+			latest_tag: luci_latest_tag || '',
+			latest_build: luci_latest_build || '',
 			has_update: 0,
-			success: luci_latest != null ? 1 : 0
+			success: luci_latest_tag != null ? 1 : 0
 		};
 
-		if (luci_latest) {
-			let current_ver = normalize_version(luci_current);
-			let latest_ver = normalize_version(substr(luci_latest, 6));
-			if (!length(current_ver))
+		if (luci_latest_tag && length(luci_latest_base)) {
+			if (!length(trim(luci_current)))
 				plugin.has_update = 1;
-			else if (latest_ver != current_ver)
+			else if (luci_app_has_update(luci_current, luci_latest_base, luci_latest_build))
 				plugin.has_update = 1;
 		}
 

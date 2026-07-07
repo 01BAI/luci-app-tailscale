@@ -6,8 +6,8 @@
 'require dom';
 
 /* 热部署后改此版本号，强制浏览器刷新 CSS/JS */
-const UI_REV = '1.0.1';
-const CSS_REV = '20260705-7';
+const UI_REV = '1.0.1 build26070701';
+const CSS_REV = '20260707-1';
 
 const SETTINGS_FIELDS = [
 	['accept_routes', '接受路由', '--accept-routes', '', 'flag'],
@@ -675,8 +675,10 @@ function formatReleaseVersion(tagOrVer) {
 	const s = String(tagOrVer);
 	if (s.indexOf('luci-v') === 0)
 		return 'v' + s.slice(6);
-	if (s.charAt(0) === 'v')
+	if (/^v/i.test(s))
 		return s;
+	if (s.indexOf(' build') > 0)
+		return 'v' + s;
 	return 'v' + s;
 }
 
@@ -696,7 +698,8 @@ function applyVersionUpdateHints(self, res, installed) {
 
 	if (res.plugin && (res.plugin.has_update === 1 || res.plugin.has_update === true) && luciSlot) {
 		const tag = res.plugin.latest_tag || res.plugin.latest;
-		dom.content(luciSlot, buildNewVersionButton(tag, ui.createHandlerFn(self, function() {
+		const label = res.plugin.latest || tag;
+		dom.content(luciSlot, buildNewVersionButton(label, ui.createHandlerFn(self, function() {
 			return runLuciAppUpdate(tag);
 		})));
 	}
