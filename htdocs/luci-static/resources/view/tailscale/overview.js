@@ -6,7 +6,7 @@
 'require dom';
 
 /* 热部署后改此版本号，强制浏览器刷新 CSS/JS */
-const UI_REV = '1.0.1 build26070703';
+const UI_REV = '1.0.1 build26070704';
 const CSS_REV = '20260707-1';
 
 const SETTINGS_FIELDS = [

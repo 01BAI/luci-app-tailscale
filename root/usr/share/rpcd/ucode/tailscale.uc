@@ -403,14 +403,37 @@ function luci_build_number(build) {
 }
 
 function parse_luci_app_version(ver) {
-	ver = trim(ver || '');
-	let m = match(ver, /^v?([0-9]+(?:\.[0-9]+)*)(?:[[:space:]]+build([0-9]+))?$/i);
-	if (!m) {
-		let base = normalize_version(ver);
-		return { base: base, build: '', display: base };
+	/*
+	 * 不用正则：ucode 正则引擎不支持非捕获分组 (?:...) 与 [[:space:]]，
+	 * 之前的写法会抛 "Repetition not preceded by valid expression"，
+	 * 导致 check_updates 整体崩溃、前端拿不到 has_update（更新按钮不出现）。
+	 * 输入形如: "1.0.1"、"v1.0.1"、"1.0.1 build26070703"、"v1.0.1 build26070703"。
+	 */
+	ver = normalize_version(ver);
+
+	let base = ver;
+	let build = '';
+
+	let idx = index(ver, 'build');
+	if (idx >= 0) {
+		base = trim(substr(ver, 0, idx));
+		build = trim(substr(ver, idx + 5));
+	} else {
+		let sp = index(ver, ' ');
+		if (sp >= 0)
+			base = trim(substr(ver, 0, sp));
 	}
-	let base = m[1];
-	let build = m[2] || '';
+
+	/* build 只保留数字 */
+	let digits = '';
+	for (let i = 0; i < length(build); i++) {
+		let c = substr(build, i, 1);
+		if (c >= '0' && c <= '9')
+			digits += c;
+	}
+	build = digits;
+
+	base = normalize_version(base);
 	let display = length(build) ? `${base} build${build}` : base;
 	return { base: base, build: build, display: display };
 }
