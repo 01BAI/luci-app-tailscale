@@ -25,7 +25,10 @@
 				"/tmp/tailscale_luci_install.log": [ "read" ],
 				"/tmp/tailscale_luci_app_update.log": [ "read" ],
 				"/tmp/tailscale_luci_app_update.status": [ "read" ],
-				"/tmp/tailscale_luci_app_update.pid": [ "read" ]
+				"/tmp/tailscale_luci_app_update.pid": [ "read" ],
+				"/tmp/tailscale_luci_apply.log": [ "read" ],
+				"/tmp/tailscale_luci_apply.status": [ "read" ],
+				"/tmp/tailscale_luci_apply.pid": [ "read" ]
 			}
 		},
 		"write": {

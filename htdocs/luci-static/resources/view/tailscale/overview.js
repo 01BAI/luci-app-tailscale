@@ -6,7 +6,7 @@
 'require dom';
 
 /* 热部署后改此版本号，强制浏览器刷新 CSS/JS */
-const UI_REV = '1.0.1 build26070701';
+const UI_REV = '1.0.1 build26070702';
 const CSS_REV = '20260707-1';
 
 const SETTINGS_FIELDS = [
@@ -1122,7 +1122,7 @@ return view.extend({
 		}
 
 		/* 1. 版本信息 — 3 列 */
-		const luciVer = overview.luci_version || UI_REV;
+		const luciVer = formatReleaseVersion(overview.luci_version || UI_REV);
 		const luciUpdateSlot = E('span', { 'data-ts-luci-update': '1' });
 		const tsUpdateSlot = E('span', { 'data-ts-tailscale-update': '1' });
 		let versionRows;

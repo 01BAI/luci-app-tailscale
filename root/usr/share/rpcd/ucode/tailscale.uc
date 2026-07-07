@@ -16,7 +16,10 @@ const LUCID_INSTALL_BG = '/etc/tailscale/luci-install-bg.sh';
 const CHECK_NETWORK = '/etc/tailscale/check_network.sh';
 const LUCID_LOGIN = '/etc/tailscale/luci-login.sh';
 const LUCID_APPLY_UP = '/etc/tailscale/luci-apply-up.sh';
+const LUCID_APPLY_UP_BG = '/etc/tailscale/luci-apply-up-bg.sh';
 const APPLY_LOG = '/tmp/tailscale_luci_apply.log';
+const APPLY_PID_FILE = '/tmp/tailscale_luci_apply.pid';
+const APPLY_RC_FILE = '/tmp/tailscale_luci_apply.status';
 const LUCID_UNINSTALL = '/etc/tailscale/luci-uninstall.sh';
 const LUCID_LIST_PEERS = '/etc/tailscale/luci-list-peers.sh';
 const STATUS_JSON_TMP = '/tmp/tailscale_luci_status.json';
@@ -642,6 +645,35 @@ function build_login_command() {
 	return `${cli} up --reset`;
 }
 
+function service_enabled() {
+	uci.load('tailscale');
+	let v = uci.get('tailscale', 'settings', 'enabled');
+	return v != '0';
+}
+
+function is_daemon_running() {
+	let sockets = [
+		'/var/run/tailscale/tailscaled.sock',
+		'/tmp/tailscaled.sock'
+	];
+
+	for (let s in sockets) {
+		if (access(s))
+			return true;
+	}
+
+	let p = exec('/sbin/pidof tailscaled 2>/dev/null');
+	if (p.code == 0 && length(p.stdout) > 0 && length(trim(p.stdout[0])) > 0)
+		return true;
+
+	p = exec('pidof tailscaled 2>/dev/null');
+	if (p.code == 0 && length(p.stdout) > 0 && length(trim(p.stdout[0])) > 0)
+		return true;
+
+	p = exec('/usr/bin/pgrep -x tailscaled 2>/dev/null');
+	return p.code == 0;
+}
+
 function wait_tailscaled_ready() {
 	for (let i = 0; i < 30; i++) {
 		if (is_daemon_running() && tailscale_cli())
@@ -651,19 +683,76 @@ function wait_tailscaled_ready() {
 	return false;
 }
 
+function apply_up_running() {
+	if (access(APPLY_RC_FILE))
+		return false;
+	if (!access(APPLY_PID_FILE))
+		return false;
+	let pid = trim(readfile(APPLY_PID_FILE) || '');
+	if (!length(pid))
+		return false;
+	return exec(`kill -0 ${pid} 2>/dev/null`).code == 0;
+}
+
+function read_apply_rc() {
+	if (!access(APPLY_RC_FILE))
+		return null;
+	let v = trim(readfile(APPLY_RC_FILE) || '');
+	return length(v) ? int(v) : null;
+}
+
+function read_apply_log() {
+	if (!access(APPLY_LOG))
+		return '';
+	/* 限制读取长度，避免任何异常情况下的超大日志拖垮 rpcd */
+	return trim(readfile(APPLY_LOG, 65536) || '');
+}
+
+/*
+ * 后台执行应用脚本并短轮询等待结果。
+ * 同步 popen 运行会真正调用 tailscale set，在 rpcd 环境下会导致 ucode 崩溃
+ * （ubus 返回 Unknown error），故与登录/安装/更新一致，改用后台 spawn + 轮询。
+ */
 function run_up_from_conf() {
 	if (!access(LUCID_APPLY_UP))
 		return { success: false, message: '应用脚本不存在: ' + LUCID_APPLY_UP };
 
+	/* dry-run 仅生成命令用于展示，不改变状态 */
 	let dry = exec('/bin/sh ' + LUCID_APPLY_UP + ' --dry-run 2>&1');
 	let cmd = (dry.code == 0 && length(dry.stdout) > 0) ? trim(dry.stdout[0]) : '';
 
-	let out = exec('/bin/sh ' + LUCID_APPLY_UP + ' 2>&1');
-	let text = join('\n', out.stdout || []);
+	if (!access(LUCID_APPLY_UP_BG))
+		return { success: false, message: '应用脚本不存在: ' + LUCID_APPLY_UP_BG, command: cmd };
+
+	spawn(`/bin/sh ${LUCID_APPLY_UP_BG}`);
+
+	/* apply 通常 2-3 秒完成；轮询至多约 25 秒（ubus 超时 30s 内） */
+	let rc = null;
+	for (let i = 0; i < 50; i++) {
+		sleep(500);
+		rc = read_apply_rc();
+		if (rc != null)
+			break;
+		if (!apply_up_running() && read_apply_rc() != null) {
+			rc = read_apply_rc();
+			break;
+		}
+	}
+
+	let text = read_apply_log();
+
+	if (rc == null) {
+		return {
+			success: false,
+			running: true,
+			message: text || '应用仍在进行中，请稍后刷新查看状态',
+			command: cmd
+		};
+	}
 
 	return {
-		success: out.code == 0,
-		message: text || (out.code == 0 ? '已应用连接设置' : 'tailscale up 失败'),
+		success: rc == 0,
+		message: text || (rc == 0 ? '已应用连接设置' : 'tailscale set/up 失败'),
 		command: cmd
 	};
 }
@@ -803,35 +892,6 @@ function start_login_up(cmd) {
 		return { ok: false, message: '登录脚本不存在: ' + LUCID_LOGIN };
 	spawn(LUCID_LOGIN);
 	return { ok: true };
-}
-
-function service_enabled() {
-	uci.load('tailscale');
-	let v = uci.get('tailscale', 'settings', 'enabled');
-	return v != '0';
-}
-
-function is_daemon_running() {
-	let sockets = [
-		'/var/run/tailscale/tailscaled.sock',
-		'/tmp/tailscaled.sock'
-	];
-
-	for (let s in sockets) {
-		if (access(s))
-			return true;
-	}
-
-	let p = exec('/sbin/pidof tailscaled 2>/dev/null');
-	if (p.code == 0 && length(p.stdout) > 0 && length(trim(p.stdout[0])) > 0)
-		return true;
-
-	p = exec('pidof tailscaled 2>/dev/null');
-	if (p.code == 0 && length(p.stdout) > 0 && length(trim(p.stdout[0])) > 0)
-		return true;
-
-	p = exec('/usr/bin/pgrep -x tailscaled 2>/dev/null');
-	return p.code == 0;
 }
 
 function service_running() {

@@ -5,7 +5,6 @@
 
 CONFIG_DIR="/etc/tailscale"
 UP_CONF="$CONFIG_DIR/tailscale_up.conf"
-APPLY_LOG="/tmp/tailscale_luci_apply.log"
 DRY_RUN=0
 
 [ "$1" = "--dry-run" ] && DRY_RUN=1
@@ -130,7 +129,19 @@ verify_advertise_routes() {
 	[ -z "$expected" ] && return 0
 
 	prefs=$($ts_cmd debug prefs 2>/dev/null) || prefs=""
-	if echo "$prefs" | grep -F "$expected" >/dev/null 2>&1; then
+
+	# 逐条校验（debug prefs 中每个子网单独成行/入数组，不能整串匹配）
+	local missing=0 r
+	local old_ifs="$IFS"
+	IFS=','
+	for r in $expected; do
+		r=$(echo "$r" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+		[ -z "$r" ] && continue
+		echo "$prefs" | grep -F "$r" >/dev/null 2>&1 || missing=1
+	done
+	IFS="$old_ifs"
+
+	if [ "$missing" -eq 0 ]; then
 		log_info "✅  已宣告子网: $expected"
 		log_info "ℹ️  请在 Tailscale 控制台 Machines → 本机 → Subnets 中批准该路由"
 		return 0
@@ -164,26 +175,28 @@ fi
 
 cmd=$(echo "$cmd" | sed "s|^tailscale |$TS_CMD |")
 
-: > "$APPLY_LOG"
 if [ "$APPLY_MODE" = "set" ]; then
 	log_info "ℹ️  已登录 (${STATE})，使用 tailscale set 应用配置（不 --reset）"
 else
 	log_info "ℹ️  尚未登录 (${STATE:-unknown})，使用 tailscale up --reset"
 fi
 log_info "🚀  正在执行: $cmd"
+
+# 捕获执行输出到变量，避免与调用方的日志重定向指向同一文件而产生
+# `cat file >> file` 式的无限增长（后台包装脚本会把本脚本 stdout 重定向到日志）。
 # shellcheck disable=SC2086
-eval "$cmd" >>"$APPLY_LOG" 2>&1
+ts_out=$(eval "$cmd" 2>&1)
 rc=$?
 
-cat "$APPLY_LOG"
+[ -n "$ts_out" ] && printf '%s\n' "$ts_out"
 
-if grep -qi 'To authenticate, visit' "$APPLY_LOG" 2>/dev/null; then
+if printf '%s' "$ts_out" | grep -qi 'To authenticate, visit' 2>/dev/null; then
 	log_warn "⚠️  输出含登录链接：请先完成 Tailscale 登录，再保存并应用连接设置"
 fi
 
 if [ "$rc" -ne 0 ]; then
 	log_error "❌  tailscale 应用失败 (exit $rc)"
-	if grep -q 'non-default flags' "$APPLY_LOG" 2>/dev/null; then
+	if printf '%s' "$ts_out" | grep -q 'non-default flags' 2>/dev/null; then
 		log_error "❌  本地已有非默认参数且与命令不一致，请确认已部署最新 luci-apply-up.sh"
 	fi
 	exit "$rc"
