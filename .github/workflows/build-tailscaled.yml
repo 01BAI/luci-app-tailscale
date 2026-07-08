@@ -1,7 +1,6 @@
-# 从 Tailscale 官方源码交叉编译 tailscaled，发布到本仓库 GitHub Release。
-# 编译方式严格对齐 CH3NGYZ/small-tailscale-openwrt：
-#   go build -tags ts_include_cli -ldflags='-s -w' ./cmd/tailscaled
-# 单一二进制 + 软链同时作为 tailscale / tailscaled 使用，再 UPX 压缩。
+# 从 Tailscale 官方源码交叉编译 tailscaled 与 derper，发布到本仓库 GitHub Release。
+# tailscaled: go build -tags ts_include_cli -ldflags='-s -w' ./cmd/tailscaled
+# derper:     go build -ldflags='-s -w' ./cmd/derper（与 tailscaled 同 tag，版本对齐）
 #
 # 使用：GitHub 网页 → Actions → Build tailscaled for OpenWrt → Run workflow
 
@@ -22,6 +21,7 @@ env:
   REPO_OFFICIAL: tailscale/tailscale
   BUILD_PLATFORMS: amd64 386 arm arm64 mips mipsle mips64 mips64le
   GO_BUILD_FLAGS: "-tags ts_include_cli -ldflags='-s -w'"
+  DERP_BUILD_FLAGS: "-ldflags='-s -w'"
 
 jobs:
   resolve:
@@ -75,7 +75,7 @@ jobs:
           sudo cp "upx-${LATEST_UPX}-amd64_linux/upx" /usr/local/bin/
           upx --version
 
-      - name: Build tailscaled (${{ matrix.arch }})
+      - name: Build tailscaled + derper (${{ matrix.arch }})
         env:
           CGO_ENABLED: "0"
           GOOS: linux
@@ -91,7 +91,11 @@ jobs:
           go build -o "$binary_build" ${{ env.GO_BUILD_FLAGS }} ./cmd/tailscaled
           ls -la "$binary_build"
 
-      - name: Compress binary (${{ matrix.arch }})
+          derper_build="derper-linux-${{ matrix.arch }}.build"
+          go build -o "$derper_build" ${{ env.DERP_BUILD_FLAGS }} ./cmd/derper
+          ls -la "$derper_build"
+
+      - name: Compress binaries (${{ matrix.arch }})
         run: |
           binary_build="tailscaled-linux-${{ matrix.arch }}.build"
           compressed="tailscaled-linux-${{ matrix.arch }}"
@@ -106,7 +110,19 @@ jobs:
               ;;
           esac
 
-          ls -la "$binary_build" "$compressed"
+          derper_build="derper-linux-${{ matrix.arch }}.build"
+          derper_out="derper-linux-${{ matrix.arch }}"
+
+          case "${{ matrix.arch }}" in
+            mips64|mips64le)
+              cp "$derper_build" "$derper_out"
+              ;;
+            *)
+              upx --lzma --best --no-progress "$derper_build" -o "$derper_out"
+              ;;
+          esac
+
+          ls -la "$binary_build" "$compressed" "$derper_build" "$derper_out"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -115,6 +131,8 @@ jobs:
           path: |
             tailscaled-linux-${{ matrix.arch }}
             tailscaled-linux-${{ matrix.arch }}.build
+            derper-linux-${{ matrix.arch }}
+            derper-linux-${{ matrix.arch }}.build
           if-no-files-found: error
 
   release:
@@ -132,13 +150,13 @@ jobs:
           cd dist
           ls -la
           echo "${{ needs.resolve.outputs.tag }}" > version.txt
-          sha256sum tailscaled-linux-*.build > SHA256SUMS.txt
-          for f in tailscaled-linux-*; do
+          sha256sum tailscaled-linux-*.build derper-linux-*.build > SHA256SUMS.txt
+          for f in tailscaled-linux-* derper-linux-*; do
             case "$f" in *.build) continue ;; esac
             sha256sum "$f"
           done >> SHA256SUMS.txt
-          md5sum tailscaled-linux-*.build > MD5SUMS.txt
-          for f in tailscaled-linux-*; do
+          md5sum tailscaled-linux-*.build derper-linux-*.build > MD5SUMS.txt
+          for f in tailscaled-linux-* derper-linux-*; do
             case "$f" in *.build) continue ;; esac
             md5sum "$f"
           done >> MD5SUMS.txt
@@ -159,10 +177,15 @@ jobs:
             编译方式与 [CH3NGYZ/small-tailscale-openwrt](https://github.com/CH3NGYZ/small-tailscale-openwrt) 一致：
             `go build -tags ts_include_cli -ldflags='-s -w' ./cmd/tailscaled`，UPX 压缩后发布 `tailscaled-linux-*`。
 
-            安装时下载 `tailscaled-linux-<arch>`，软链为 `/usr/bin/tailscale` 与 `/usr/bin/tailscaled` 即可。
+            同 tag 另编译 DERP 中继：`go build -ldflags='-s -w' ./cmd/derper`，发布 `derper-linux-*`（与 tailscaled 版本一致，可用于自建 DERP）。
+
+            - tailscaled：下载 `tailscaled-linux-<arch>`，软链为 `/usr/bin/tailscale` 与 `/usr/bin/tailscaled`
+            - derper：下载 `derper-linux-<arch>`，安装到 `/usr/local/bin/derper` 并配置 procd 服务
           files: |
             dist/tailscaled-linux-*
             dist/tailscaled-linux-*.build
+            dist/derper-linux-*
+            dist/derper-linux-*.build
             dist/version.txt
             dist/SHA256SUMS.txt
             dist/MD5SUMS.txt
