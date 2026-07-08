@@ -1,10 +1,16 @@
-/* luci-app-tailscale overview rev 20260705-6 */
+/* luci-app-tailscale overview rev 20260708-10 */
+
+.tailscale-overview .ts-status-self {
+	background: #e8e8e8 !important;
+	color: #222 !important;
+	border: 1px solid #d0d0d0;
+}
 .tailscale-overview {
 	--ts-indent: 2.5rem;
 	--ts-label-w: 7rem;
 	--ts-value-w: 11rem;
 	--ts-gap: 2rem;
-	--ts-actions-gap: 4rem;
+	--ts-panel-w: 48rem;
 }
 
 /* 各卡片去掉左右内边距，由 grid 统一控制列起点 */
@@ -18,6 +24,187 @@
 	padding-right: 1rem;
 }
 
+.tailscale-overview .ts-section-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 1rem;
+	padding: 0 1rem 0 var(--ts-indent);
+}
+
+.tailscale-overview .ts-section-head > h3 {
+	padding: 0;
+	margin: 0;
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.tailscale-overview .ts-section-head .btn {
+	flex: 0 0 auto;
+}
+
+.tailscale-overview .ts-plugin-section {
+	padding-top: 0.35rem;
+	padding-bottom: 0.35rem;
+}
+
+.tailscale-overview .ts-plugin-section > .alert-message {
+	margin: 0 1rem 0.5rem var(--ts-indent);
+}
+
+.tailscale-overview .ts-plugin-strip {
+	padding: 0.4rem 1rem 0.5rem var(--ts-indent);
+}
+
+.tailscale-overview .ts-plugin-main {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 0.3rem;
+	min-width: 0;
+}
+
+.tailscale-overview .ts-section-head > h3,
+.tailscale-overview .ts-plugin-title {
+	font-size: 1.2rem;
+	font-weight: 600;
+}
+
+.tailscale-overview .ts-plugin-title {
+	display: inline-flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 0.4rem 0.5rem;
+	margin: 0;
+	padding: 0;
+	line-height: 1.35;
+	color: inherit;
+}
+
+.tailscale-overview .ts-plugin-title .ts-plugin-ver {
+	color: #666;
+	font-size: 0.72rem;
+	font-weight: normal;
+	line-height: 1.35;
+	white-space: nowrap;
+}
+
+.tailscale-overview .ts-plugin-actions {
+	display: inline-flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 0.45rem;
+}
+
+.tailscale-overview .ts-github-icon {
+	display: inline-block;
+	flex: 0 0 auto;
+	width: 1.05rem;
+	height: 1.05rem;
+	background-color: #555;
+	opacity: 0.75;
+	vertical-align: middle;
+	-webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='black' d='M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z'/%3E%3C/svg%3E") center / contain no-repeat;
+	mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='black' d='M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z'/%3E%3C/svg%3E") center / contain no-repeat;
+	transition: background-color 0.15s ease, opacity 0.15s ease;
+}
+
+.tailscale-overview .ts-github-icon:hover {
+	background-color: #0069d6;
+	opacity: 1;
+}
+
+/* 连接设置弹窗（渲染在 .tailscale-overview 外，须用全局选择器） */
+.ts-settings-modal {
+	min-width: 32rem;
+	max-width: 42rem;
+}
+
+.ts-settings-modal-title {
+	margin: 0 0 0.85rem;
+	padding: 0 0 0.55rem;
+	font-size: 1.25rem;
+	font-weight: 600;
+	line-height: 1.35;
+	border-bottom: 1px solid #e4e4e4;
+}
+
+.ts-settings-form {
+	display: flex;
+	flex-direction: column;
+	gap: 0.55rem;
+}
+
+.ts-settings-row {
+	display: flex;
+	align-items: center;
+	gap: 1rem;
+	min-height: 2rem;
+	white-space: nowrap;
+}
+
+.ts-settings-label {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.4rem;
+	flex: 0 0 13.5rem;
+	min-width: 13.5rem;
+	white-space: nowrap;
+	line-height: 1.4;
+}
+
+.ts-settings-name {
+	flex: 0 0 auto;
+}
+
+.ts-settings-label .ts-cli-param {
+	font-size: 0.82em;
+	color: #666;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.ts-settings-control {
+	flex: 1 1 auto;
+	min-width: 0;
+	display: flex;
+	align-items: center;
+}
+
+.ts-settings-control .ts-input,
+.ts-settings-control input.cbi-input-text {
+	width: 100%;
+	max-width: 20rem;
+	color: #333 !important;
+	-webkit-text-fill-color: #333 !important;
+}
+
+.ts-settings-control select.ts-input {
+	width: 100%;
+	max-width: 20rem;
+}
+
+.ts-settings-control input[type="checkbox"] {
+	margin: 0;
+}
+
+.ts-modal-actions {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	gap: 0.5rem;
+	margin-top: 1rem;
+	padding-top: 0.85rem;
+	border-top: 1px solid #e4e4e4;
+}
+
+.tailscale-overview .ts-peer-self {
+	background: rgba(0, 105, 214, 0.06);
+}
+
+.tailscale-overview .ts-peer-self .td:first-child {
+	font-weight: 600;
+}
+
 .tailscale-overview .ts-new-version-btn {
 	margin-right: 0.75rem;
 	white-space: normal;
@@ -25,19 +212,29 @@
 	max-width: 100%;
 }
 
-.tailscale-overview .ts-grid-3,
+.tailscale-overview .ts-grid-info,
 .tailscale-overview .ts-grid-2 {
 	display: grid;
-	grid-template-columns:
-		minmax(0, var(--ts-label-w))
-		minmax(0, var(--ts-value-w))
-		minmax(0, 1fr);
 	column-gap: var(--ts-gap);
 	row-gap: 0.55rem;
 	padding: 0.25rem 1rem 0.6rem var(--ts-indent);
 	align-items: center;
 	width: 100%;
 	box-sizing: border-box;
+}
+
+.tailscale-overview .ts-grid-info {
+	grid-template-columns:
+		minmax(0, var(--ts-label-w))
+		minmax(0, var(--ts-panel-w));
+	max-width: calc(var(--ts-indent) + var(--ts-label-w) + var(--ts-gap) + var(--ts-panel-w) + 1rem);
+}
+
+.tailscale-overview .ts-grid-2 {
+	grid-template-columns:
+		minmax(0, var(--ts-label-w))
+		minmax(0, var(--ts-value-w))
+		minmax(0, 1fr);
 }
 
 /* 连接设置：前两列与上方对齐，控件从第 2 列起可延伸到右侧 */
@@ -95,14 +292,46 @@
 	min-width: 0;
 }
 
-.tailscale-overview .ts-actions {
-	padding-left: var(--ts-actions-gap);
+.tailscale-overview .ts-panel-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.75rem;
+	min-width: 0;
+	width: 100%;
+}
+
+.tailscale-overview .ts-panel-row .ts-value {
+	flex: 1 1 auto;
+	min-width: 0;
+	line-height: 1.5;
+}
+
+.tailscale-overview .ts-panel-row .ts-actions {
 	display: flex;
 	align-items: center;
 	flex-wrap: wrap;
 	gap: 0.45rem;
+	flex: 0 0 auto;
+	justify-content: flex-end;
 	min-height: 1.75rem;
-	justify-content: flex-start;
+}
+
+.tailscale-overview .ts-peers-value {
+	min-width: 0;
+	width: 100%;
+	max-width: var(--ts-panel-w);
+	align-self: start;
+	padding-top: 0.15rem;
+	overflow: visible;
+}
+
+.tailscale-overview .ts-peers-table {
+	margin: 0;
+	width: 100%;
+	max-width: var(--ts-panel-w);
+	font-size: 0.95em;
+	text-align: left;
 }
 
 .tailscale-overview .ts-hint {
@@ -159,23 +388,6 @@
 	line-height: 1.5;
 }
 
-.tailscale-overview .ts-peers-value {
-	grid-column: 2 / -1;
-	min-width: 0;
-	align-self: start;
-	justify-self: start;
-	padding-top: 0.15rem;
-	overflow: visible;
-}
-
-.tailscale-overview .ts-peers-table {
-	margin: 0;
-	width: 100%;
-	max-width: 48rem;
-	font-size: 0.95em;
-	text-align: left;
-}
-
 .tailscale-overview .ts-peers-table .tr,
 .tailscale-overview .ts-peers-table .tr.table-titles,
 .tailscale-overview .ts-peers-table .th,
@@ -193,7 +405,7 @@
 .tailscale-overview table.ts-peers-table td,
 .tailscale-overview .ts-peers-table .th,
 .tailscale-overview .ts-peers-table .td {
-	padding: 0.35rem 0.5rem;
+	padding: 0.55rem 0.65rem;
 	white-space: nowrap;
 	overflow: visible;
 }

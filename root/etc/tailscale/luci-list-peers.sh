@@ -33,10 +33,11 @@ cli_status_for_ip() {
 	}'
 }
 
-# 与 tailscale status / 控制面板一致：
+# 与 tailscale 控制面板一致：
 # - CLI 含 offline → 离线
-# - JSON Online=false 或 LastSeen 为真实时间 → 离线
-# - Online=true 且 LastSeen 为零时间 → Connected（在线）
+# - JSON Online=true → 在线（含 iOS 等 LastSeen 非零但仍在线的节点）
+# - Online=false 且 LastSeen 为零时间 → 在线（与本机直连中）
+# - 其余 → 离线
 peer_is_connected() {
 	_online="$1"
 	_lastseen="$2"
@@ -45,7 +46,7 @@ peer_is_connected() {
 	echo "$_cli" | grep -qi "offline" && return 1
 
 	case "$_online" in
-		false|False|0) return 1 ;;
+		true|True|1) return 0 ;;
 	esac
 
 	if is_zero_time "$_lastseen"; then

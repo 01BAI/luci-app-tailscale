@@ -14,7 +14,7 @@ set -eu
 set -o pipefail 2>/dev/null || true
 
 REPO="01BAI/luci-app-tailscale"
-TAG="luci-v1.0.1"
+TAG="luci-v1.0.2"
 PKG_NAME="luci-app-tailscale"
 TMP_DIR="/tmp/luci-app-tailscale-install.$$"
 

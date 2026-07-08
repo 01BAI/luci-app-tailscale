@@ -6,8 +6,11 @@
 'require dom';
 
 /* 热部署后改此版本号，强制浏览器刷新 CSS/JS */
-const UI_REV = '1.0.1 build26070704';
-const CSS_REV = '20260707-1';
+const UI_REV = '1.0.2 build26070801';
+const CSS_REV = '20260708-10';
+const APP_NAME = 'Tailscale for OpenWRT';
+const GITHUB_URL = 'https://github.com/01BAI/luci-app-tailscale';
+const TAILSCALE_ADMIN_URL = 'https://login.tailscale.com/admin';
 
 const SETTINGS_FIELDS = [
 	['accept_routes', '接受路由', '--accept-routes', '', 'flag'],
@@ -92,7 +95,7 @@ function applyUpSettingsToForm(root, settings) {
 
 function settingsLabel(label, cli) {
 	return E('div', { class: 'ts-settings-label' }, [
-		E('span', {}, label),
+		E('span', { class: 'ts-settings-name' }, label),
 		E('code', { class: 'ts-cli-param' }, cli)
 	]);
 }
@@ -179,6 +182,47 @@ function section(title, children) {
 			nodes.push(c);
 	});
 	return E('div', { class: 'cbi-section' }, nodes);
+}
+
+function sectionWithHead(title, headExtra, children) {
+	const head = E('div', { class: 'ts-section-head' }, [
+		E('h3', {}, title),
+		headExtra || ''
+	]);
+	const nodes = [head];
+	(children || []).forEach(c => {
+		if (c !== '' && c != null && c !== false)
+			nodes.push(c);
+	});
+	return E('div', { class: 'cbi-section' }, nodes);
+}
+
+function githubIconLink() {
+	return E('a', {
+		class: 'ts-github-icon',
+		href: GITHUB_URL,
+		target: '_blank',
+		rel: 'noopener noreferrer',
+		title: 'GitHub 项目主页',
+		'aria-label': 'GitHub 项目主页'
+	});
+}
+
+function pluginStrip(version, updateContent, rpcError) {
+	const nodes = [];
+	if (rpcError)
+		nodes.push(rpcError);
+	nodes.push(E('div', { class: 'ts-plugin-strip' }, [
+		E('div', { class: 'ts-plugin-main' }, [
+			E('h3', { class: 'ts-plugin-title' }, [
+				APP_NAME,
+				githubIconLink(),
+				E('span', { class: 'ts-plugin-ver' }, version)
+			]),
+			E('span', { class: 'ts-plugin-actions', 'data-ts-luci-update': '1' }, updateContent)
+		])
+	]));
+	return E('div', { class: 'cbi-section ts-plugin-section' }, nodes);
 }
 
 function grid3Row(label, value, actions) {
@@ -310,39 +354,35 @@ function formatPathDetail(detail) {
 
 function formatConnectionCell(p) {
 	if (p.self)
-		return E('span', { class: 'label' }, '本机');
+		return E('span', { class: 'label ts-status-self' }, '本机');
 
 	if (!peerIsConnected(p))
-		return '-';
+		return E('span', { class: 'label' }, '离线');
 
 	const path = p.path || 'none';
 	if (path === 'none' || path === '')
-		return E('span', { class: 'ts-hint' }, '未建立');
+		return E('span', { class: 'label success' }, '在线');
 
 	const bar = path.indexOf('#');
 	const kind = bar >= 0 ? path.slice(0, bar) : path;
 	const detail = bar >= 0 ? path.slice(bar + 1) : '';
 	const hint = formatPathDetail(detail);
 
-	if (kind === 'direct') {
-		const attrs = { class: 'ts-path-direct-wrap' };
-		if (hint)
-			attrs['data-detail'] = hint;
-		return E('span', attrs, E('span', { class: 'label success' }, '直连'));
-	}
-	if (kind === 'relay') {
-		return E('span', {}, [
-			E('span', { class: 'label warning' }, '中继'),
-			hint ? E('span', { class: 'ts-hint ts-peer-path-detail' }, ' ' + hint) : ''
-		]);
-	}
-	if (kind === 'peer_relay') {
-		return E('span', {}, [
-			E('span', { class: 'label' }, '节点中继'),
-			hint ? E('span', { class: 'ts-hint ts-peer-path-detail' }, ' ' + hint) : ''
-		]);
-	}
-	return '-';
+	const KINDS = {
+		direct: { label: '直连', labelClass: 'label success' },
+		relay: { label: '中继', labelClass: 'label warning' },
+		peer_relay: { label: '节点中继', labelClass: 'label' }
+	};
+
+	const meta = KINDS[kind];
+	if (!meta)
+		return E('span', { class: 'label' }, '离线');
+
+	/* 三种连接方式统一样式：悬停在标签上时以 tooltip 显示连接详情 */
+	const attrs = { class: 'ts-path-direct-wrap' };
+	if (hint)
+		attrs['data-detail'] = hint;
+	return E('span', attrs, E('span', { class: meta.labelClass }, meta.label));
 }
 
 function extractSubnetRoutes(peer) {
@@ -411,17 +451,23 @@ function formatPeerLastSeen(p) {
 	return '';
 }
 
-function formatPeerStatus(p) {
-	if (peerIsConnected(p))
-		return '在线';
-	const when = formatPeerLastSeen(p);
-	return when ? ('离线，' + when) : '离线';
-}
-
-function peerStatusLabel(p) {
-	if (peerIsConnected(p))
-		return E('span', { class: 'label success' }, formatPeerStatus(p));
-	return E('span', { class: 'label' }, formatPeerStatus(p));
+function peersTable(peers) {
+	return E('table', { class: 'table ts-peers-table' }, [
+		E('tr', { class: 'tr table-titles' }, [
+			E('th', { class: 'th' }, 'IP'),
+			E('th', { class: 'th' }, '名称'),
+			E('th', { class: 'th' }, '系统'),
+			E('th', { class: 'th' }, '子网路由'),
+			E('th', { class: 'th' }, '状态')
+		]),
+		...peers.map(p => E('tr', { class: 'tr' + (p.self ? ' ts-peer-self' : '') }, [
+			E('td', { class: 'td' }, p.ip || '-'),
+			E('td', { class: 'td' }, p.self ? E('span', {}, [p.name || '-', E('span', { class: 'ts-hint' }, '本机')]) : (p.name || '-')),
+			E('td', { class: 'td' }, p.os || '-'),
+			E('td', { class: 'td ts-peer-routes' }, p.routes || '-'),
+			E('td', { class: 'td ts-peer-path' }, formatConnectionCell(p))
+		]))
+	]);
 }
 
 function normalizePeers(peers) {
@@ -472,25 +518,21 @@ function normalizePeers(peers) {
 	});
 }
 
-function peersTable(peers) {
-	return E('table', { class: 'table ts-peers-table' }, [
-		E('tr', { class: 'tr table-titles' }, [
-			E('th', { class: 'th' }, 'IP'),
-			E('th', { class: 'th' }, '名称'),
-			E('th', { class: 'th' }, '系统'),
-			E('th', { class: 'th' }, '子网路由'),
-			E('th', { class: 'th' }, '连接方式'),
-			E('th', { class: 'th' }, '状态')
-		]),
-		...peers.map(p => E('tr', { class: 'tr' }, [
-			E('td', { class: 'td' }, p.ip || '-'),
-			E('td', { class: 'td' }, p.name || '-'),
-			E('td', { class: 'td' }, p.os || '-'),
-			E('td', { class: 'td ts-peer-routes' }, p.routes || '-'),
-			E('td', { class: 'td ts-peer-path' }, formatConnectionCell(p)),
-			E('td', { class: 'td' }, peerStatusLabel(p))
-		]))
-	]);
+function peersWithLocalFallback(peers, status) {
+	if (peers && peers.length)
+		return peers;
+	if (status && status.ipv4) {
+		return [{
+			name: status.hostname || '-',
+			ip: status.ipv4,
+			os: '-',
+			online: true,
+			self: true,
+			routes: '',
+			path: ''
+		}];
+	}
+	return [];
 }
 
 function renderPeersContent(peers) {
@@ -519,15 +561,7 @@ function loggedInUserInfo(status) {
 	return E('span', {}, display);
 }
 
-function tailscaleIpDisplay(status, canConnect, isLoggedIn) {
-	if (canConnect && isLoggedIn && status.ipv4)
-		return status.ipv4;
-	if (canConnect && isLoggedIn && (status.status === 'Starting' || !status.ipv4))
-		return E('span', { class: 'label warning' }, '连接中...');
-	return '-';
-}
-
-function buildTailnetCell(installed, canConnect, isLoggedIn, statusReadFailed, sessionSaved, status) {
+function buildLoginStatusCell(installed, canConnect, isLoggedIn, statusReadFailed, sessionSaved, status) {
 	if (!installed) {
 		return sessionSaved ? sessionSavedInfo() :
 			E('span', { class: 'label' }, '未安装');
@@ -537,29 +571,41 @@ function buildTailnetCell(installed, canConnect, isLoggedIn, statusReadFailed, s
 	if (canConnect && isLoggedIn)
 		return loggedInUserInfo(status);
 	if (canConnect)
-		return E('button', {
-			class: 'btn cbi-button-action important',
-			click: ui.createHandlerFn(null, function() {
-				return runTailscaleLogin();
-			})
-		}, '登录');
+		return E('span', { class: 'label' }, '未登录');
 	if (sessionSaved)
 		return sessionSavedInfo();
 	return E('span', { class: 'label' }, '服务未运行');
 }
 
-function buildTailnetAction(installed, canConnect, isLoggedIn, statusReadFailed) {
-	if (!installed || statusReadFailed || !canConnect || !isLoggedIn)
+function buildLoginStatusAction(installed, canConnect, isLoggedIn, statusReadFailed) {
+	if (!installed || statusReadFailed || !canConnect)
 		return '';
+	if (isLoggedIn) {
+		return [
+			E('button', {
+				class: 'btn cbi-button-action',
+				click: function(ev) {
+					ev.preventDefault();
+					window.open(TAILSCALE_ADMIN_URL, '_blank', 'noopener');
+				}
+			}, '控制面板'),
+			E('button', {
+				class: 'btn cbi-button-neutral',
+				click: ui.createHandlerFn(null, function() {
+					return callDoLogout().then(res => {
+						ui.addNotification(null, E('p', {}, res.message || ''));
+						location.reload();
+					});
+				})
+			}, '登出')
+		];
+	}
 	return E('button', {
-		class: 'btn cbi-button-negative',
+		class: 'btn cbi-button-neutral',
 		click: ui.createHandlerFn(null, function() {
-			return callDoLogout().then(res => {
-				ui.addNotification(null, E('p', {}, res.message || ''));
-				location.reload();
-			});
+			return runTailscaleLogin();
 		})
-	}, '登出');
+	}, '登录');
 }
 
 function overviewNeedsPoll(overview, status, installed) {
@@ -581,16 +627,25 @@ function connectionNeedsPoll(overview, status, installed) {
 		status.login_status === 'session_saved';
 }
 
-function connectionGrid(rows, peers, showPeersSection) {
+function tailscaleInfoGrid(rows, peers, showPeersSection) {
 	const cells = [];
 	rows.forEach(function(r) {
-		const valueAttr = r[0] === 'Tailnet' ? { 'data-ts-connection': 'tailnet' } :
-			r[0] === 'Tailscale IP' ? { 'data-ts-connection': 'tsip' } : {};
-		const actionsAttr = r[0] === 'Tailnet' ? { 'data-ts-connection': 'tailnet-actions' } : {};
+		const key = r[3] || '';
+		let valueAttr = {};
+		let actionsAttr = {};
+		if (key === 'runtime') {
+			valueAttr = { 'data-ts-runtime': 'status' };
+			actionsAttr = { 'data-ts-runtime': 'action' };
+		} else if (key === 'login') {
+			valueAttr = { 'data-ts-info': 'login' };
+			actionsAttr = { 'data-ts-info-actions': 'login' };
+		}
 		cells.push(
 			E('div', { class: 'ts-label' }, r[0]),
-			E('div', Object.assign({ class: 'ts-value' }, valueAttr), r[1] != null ? r[1] : ''),
-			E('div', Object.assign({ class: 'ts-actions' }, actionsAttr), r[2] != null ? r[2] : '')
+			E('div', { class: 'ts-panel-row' }, [
+				E('div', Object.assign({ class: 'ts-value' }, valueAttr), r[1] != null ? r[1] : ''),
+				E('div', Object.assign({ class: 'ts-actions' }, actionsAttr), r[2] != null ? r[2] : '')
+			])
 		);
 	});
 	if (showPeersSection) {
@@ -599,35 +654,92 @@ function connectionGrid(rows, peers, showPeersSection) {
 			E('div', { class: 'ts-peers-value', 'data-ts-peers': '1' }, renderPeersContent(peers))
 		);
 	}
-	return E('div', { class: 'ts-grid-3' }, cells);
+	return E('div', { class: 'ts-grid-info' }, cells);
 }
 
-function updateConnectionSection(overview, status, installed) {
+function updateTailscaleInfoSection(overview, status, installed) {
 	const canConnect = installed && overview.enabled && overview.running;
 	const isLoggedIn = isLoggedInStatus(status);
 	const statusReadFailed = status.login_status === 'status_error';
 	const sessionSaved = status.session_saved === true || status.session_saved === 1 ||
 		status.login_status === 'session_saved';
 
-	const tailnetEl = document.querySelector('.tailscale-overview [data-ts-connection="tailnet"]');
-	const tsipEl = document.querySelector('.tailscale-overview [data-ts-connection="tsip"]');
-	const actionsEl = document.querySelector('.tailscale-overview [data-ts-connection="tailnet-actions"]');
+	const loginEl = document.querySelector('.tailscale-overview [data-ts-info="login"]');
+	const loginActionsEl = document.querySelector('.tailscale-overview [data-ts-info-actions="login"]');
 	const peersEl = document.querySelector('.tailscale-overview [data-ts-peers="1"]');
 
-	if (tailnetEl) {
-		dom.content(tailnetEl, buildTailnetCell(
+	if (loginEl) {
+		dom.content(loginEl, buildLoginStatusCell(
 			installed, canConnect, isLoggedIn, statusReadFailed, sessionSaved, status));
 	}
-	if (tsipEl) {
-		dom.content(tsipEl, tailscaleIpDisplay(status, canConnect, isLoggedIn));
-	}
-	if (actionsEl) {
-		dom.content(actionsEl, buildTailnetAction(installed, canConnect, isLoggedIn, statusReadFailed));
+	if (loginActionsEl) {
+		dom.content(loginActionsEl, buildLoginStatusAction(
+			installed, canConnect, isLoggedIn, statusReadFailed));
 	}
 	if (peersEl) {
-		const peers = (canConnect && isLoggedIn) ? normalizePeers(status.peers) : [];
+		const peers = (canConnect && isLoggedIn)
+			? peersWithLocalFallback(normalizePeers(status.peers), status) : [];
 		dom.content(peersEl, renderPeersContent(peers));
 	}
+}
+
+function buildUpSettingsForm(upSettings) {
+	const settingsRoot = E('div', { id: 'tailscale-up-settings', class: 'ts-settings-form' });
+	SETTINGS_FIELDS.forEach(function(f) {
+		settingsRoot.appendChild(E('div', { class: 'ts-settings-row' }, [
+			settingsLabel(f[1], f[2]),
+			E('div', { class: 'ts-settings-control' },
+				settingsControl(f[0], f[3], upSettings, f[4], f[5]))
+		]));
+	});
+	return settingsRoot;
+}
+
+function openUpSettingsModal(self, upSettings) {
+	const settingsRoot = buildUpSettingsForm(upSettings);
+	const modalBody = E('div', { class: 'ts-settings-modal' }, [
+		E('h3', { class: 'ts-settings-modal-title' }, '连接设置 (tailscale up)'),
+		settingsRoot,
+		E('div', { class: 'ts-modal-actions' }, [
+			E('button', {
+				class: 'btn cbi-button-save',
+				click: ui.createHandlerFn(self, function() {
+					const settings = collectUpSettings(settingsRoot);
+					return callSetUpSettings(settings).then(function(res) {
+						if (!res || res.success === false || res.error)
+							throw new Error((res && (res.message || res.error)) || '保存失败');
+						applyUpSettingsToForm(settingsRoot, res.settings || settings);
+						ui.addNotification(null, E('p', {}, '设置已保存。'));
+					}).catch(function(err) {
+						ui.addNotification(null, E('p', { class: 'alert-message error' },
+							(err && err.message) || '保存失败'));
+					});
+				})
+			}, '保存'),
+			E('button', {
+				class: 'btn cbi-button-apply important',
+				click: ui.createHandlerFn(self, function() {
+					const settings = collectUpSettings(settingsRoot);
+					return saveAndConfirmApplyUp(settings, settingsRoot).then(function() {
+						ui.hideModal();
+					}).catch(function(err) {
+						if ((err && err.message) === '已取消')
+							return;
+						ui.addNotification(null, E('pre', { class: 'alert-message error', style: 'white-space:pre-wrap;' },
+							(err && err.message) || '应用失败'));
+					});
+				})
+			}, '保存并应用'),
+			E('button', {
+				class: 'btn cbi-button-neutral',
+				click: function(ev) {
+					ev.preventDefault();
+					ui.hideModal();
+				}
+			}, '关闭')
+		])
+	]);
+	ui.showModal('', [modalBody]);
 }
 
 function manageConnectionPolling(self, overview, status, installed) {
@@ -648,14 +760,35 @@ function manageConnectionPolling(self, overview, status, installed) {
 	}
 }
 
+function buildSettingsButton(self) {
+	return E('button', {
+		class: 'btn cbi-button-action',
+		click: ui.createHandlerFn(self, function() {
+			return rpcCall(callGetUpSettings(), {}).then(function(current) {
+				openUpSettingsModal(self, current || {});
+			});
+		})
+	}, '连接设置');
+}
+
 function buildRuntimeToggleButton(self, overview) {
 	const on = isServiceEnabled(overview);
 	return E('button', {
-		class: on ? 'btn cbi-button-negative' : 'btn cbi-button-apply important',
+		class: on ? 'btn cbi-button-neutral' : 'btn cbi-button-apply important',
 		click: ui.createHandlerFn(self, function() {
 			return self._toggleService();
 		})
 	}, on ? '停用' : '启用');
+}
+
+function buildRuntimeActions(self, overview, installed) {
+	if (!installed)
+		return '';
+	const parts = [];
+	if (isServiceEnabled(overview))
+		parts.push(buildSettingsButton(self));
+	parts.push(buildRuntimeToggleButton(self, overview));
+	return parts;
 }
 
 function updateRuntimeSection(self, overview, status, installed) {
@@ -665,7 +798,7 @@ function updateRuntimeSection(self, overview, status, installed) {
 	if (statusEl)
 		dom.content(statusEl, runtimeLabel(installed, overview, status));
 	if (actionEl)
-		dom.content(actionEl, installed ? buildRuntimeToggleButton(self, overview) : '');
+		dom.content(actionEl, buildRuntimeActions(self, overview, installed));
 }
 
 function formatReleaseVersion(tagOrVer) {
@@ -1007,11 +1140,8 @@ return view.extend({
 	render: function(data) {
 		const overview = data[0] || {};
 		const status = data[1] || {};
-		const upSettings = data[2] || {};
 		const rpcFailed = overview._rpc_failed === true;
 		const installed = !rpcFailed && !!overview.installed;
-
-		const settingsRoot = E('div', { id: 'tailscale-up-settings' });
 		const self = this;
 
 		self._liveOverview = overview;
@@ -1022,7 +1152,12 @@ return view.extend({
 			if (!peersEl)
 				return Promise.resolve();
 			return rpcCall(callGetStatus(), {}).then(function(st) {
-				dom.content(peersEl, renderPeersContent(normalizePeers(st.peers)));
+				const inst = self._liveOverview && self._liveOverview.installed;
+				const can = inst && self._liveOverview.enabled && self._liveOverview.running;
+				const loggedIn = isLoggedInStatus(st);
+				const list = (can && loggedIn)
+					? peersWithLocalFallback(normalizePeers(st.peers), st) : [];
+				dom.content(peersEl, renderPeersContent(list));
 			});
 		};
 
@@ -1035,7 +1170,7 @@ return view.extend({
 				self._liveStatus = res[1] || {};
 				const inst = !!self._liveOverview.installed;
 				updateRuntimeSection(self, self._liveOverview, self._liveStatus, inst);
-				updateConnectionSection(self._liveOverview, self._liveStatus, inst);
+				updateTailscaleInfoSection(self._liveOverview, self._liveStatus, inst);
 
 				if (!overviewNeedsPoll(self._liveOverview, self._liveStatus, inst)) {
 					poll.remove(self._refreshConnection);
@@ -1054,10 +1189,9 @@ return view.extend({
 			const enabling = !isServiceEnabled(ov);
 			const actionWrap = document.querySelector('.tailscale-overview [data-ts-runtime="action"]');
 			const statusEl = document.querySelector('.tailscale-overview [data-ts-runtime="status"]');
-			const btn = actionWrap ? actionWrap.querySelector('button') : null;
 
-			if (btn)
-				btn.disabled = true;
+			if (actionWrap)
+				actionWrap.querySelectorAll('button').forEach(function(b) { b.disabled = true; });
 			if (statusEl)
 				dom.content(statusEl, E('span', { class: 'spinning' }, enabling ? '正在启用...' : '正在停用...'));
 
@@ -1077,16 +1211,15 @@ return view.extend({
 				self._liveStatus = res[1] || {};
 				const inst = !!self._liveOverview.installed;
 				updateRuntimeSection(self, self._liveOverview, self._liveStatus, inst);
-				updateConnectionSection(self._liveOverview, self._liveStatus, inst);
+				updateTailscaleInfoSection(self._liveOverview, self._liveStatus, inst);
 				manageConnectionPolling(self, self._liveOverview, self._liveStatus, inst);
 			}).catch(function(err) {
 				ui.addNotification(null, E('p', { class: 'alert-message error' },
 					(err && err.message) || '操作失败'));
 				updateRuntimeSection(self, self._liveOverview || ov, self._liveStatus || status, installed);
 			}).finally(function() {
-				const b = actionWrap ? actionWrap.querySelector('button') : null;
-				if (b)
-					b.disabled = false;
+				if (actionWrap)
+					actionWrap.querySelectorAll('button').forEach(function(b) { b.disabled = false; });
 			});
 		};
 
@@ -1104,128 +1237,62 @@ return view.extend({
 			});
 		}
 
-		/* 1. 版本信息 — 3 列 */
+		/* 1. 插件信息 */
 		const luciVer = formatReleaseVersion(overview.luci_version || UI_REV);
-		const luciUpdateSlot = E('span', { 'data-ts-luci-update': '1' });
+
+		const pluginModule = pluginStrip(luciVer, '',
+			rpcFailed ? E('div', { class: 'alert-message error' }, '无法连接后端，请执行 /etc/init.d/rpcd restart 后刷新') : '');
+
+		/* 2. Tailscale 信息 */
 		const tsUpdateSlot = E('span', { 'data-ts-tailscale-update': '1' });
-		let versionRows;
-
-		if (!installed) {
-			versionRows = [
-				['插件版本', luciVer, luciUpdateSlot],
-				['Tailscale', E('button', {
-					class: 'btn cbi-button-apply important',
-					click: ui.createHandlerFn(self, function() {
-						return doInstallOrUpdate('latest');
-					})
-				}, '安装 Tailscale'), '']
-			];
-		} else {
-			versionRows = [
-				['插件版本', luciVer, luciUpdateSlot],
-				['Tailscale', E('span', {}, overview.version || status.version || '-'), [
-					tsUpdateSlot,
-					E('button', {
-						class: 'btn cbi-button-negative',
-						click: ui.createHandlerFn(self, function() {
-							return doUninstall();
-						})
-					}, '卸载')
-				]]
-			];
-		}
-
-		const versionModule = section('版本信息', [
-			rpcFailed ? E('div', { class: 'alert-message error' }, '无法连接后端，请执行 /etc/init.d/rpcd restart 后刷新') : '',
-			grid3(versionRows)
-		]);
-
-		/* 2. 运行状态 — 3 列 */
-		const runtimeAction = installed ? buildRuntimeToggleButton(self, overview) : '';
-
-		const runtimeModule = section('运行状态', [
-			E('div', { class: 'ts-grid-3' }, [
-				E('div', { class: 'ts-label' }, '状态'),
-				E('div', { class: 'ts-value', 'data-ts-runtime': 'status' },
-					runtimeLabel(installed, overview, status)),
-				E('div', { class: 'ts-actions', 'data-ts-runtime': 'action' }, runtimeAction)
-			])
-		]);
-
-		/* 3. 连接状态 — 3 列 */
+		const runtimeAction = buildRuntimeActions(self, overview, installed);
 		const canConnect = installed && overview.enabled && overview.running;
 		const isLoggedIn = isLoggedInStatus(status);
 		const statusReadFailed = status.login_status === 'status_error';
 		const sessionSaved = status.session_saved === true || status.session_saved === 1 ||
 			status.login_status === 'session_saved';
+		const peers = (canConnect && isLoggedIn)
+			? peersWithLocalFallback(normalizePeers(status.peers), status) : [];
 
-		const tailnetValue = buildTailnetCell(
-			installed, canConnect, isLoggedIn, statusReadFailed, sessionSaved, status);
-		const tailnetAction = buildTailnetAction(
-			installed, canConnect, isLoggedIn, statusReadFailed);
+		let tsVersionValue;
+		let tsVersionActions;
+		if (!installed) {
+			tsVersionValue = E('span', { class: 'label' }, '未安装');
+			tsVersionActions = E('button', {
+				class: 'btn cbi-button-apply important',
+				click: ui.createHandlerFn(self, function() {
+					return doInstallOrUpdate('latest');
+				})
+			}, '安装 Tailscale');
+		} else {
+			tsVersionValue = E('span', {}, overview.version || status.version || '-');
+			tsVersionActions = [
+				tsUpdateSlot,
+				E('button', {
+					class: 'btn cbi-button-neutral',
+					click: ui.createHandlerFn(self, function() {
+						return doUninstall();
+					})
+				}, '卸载')
+			];
+		}
 
-		const peers = normalizePeers(status.peers);
-
-		const connectionModule = section('连接状态', [
-			connectionGrid([
-				['Tailnet', tailnetValue, tailnetAction],
-				['Tailscale IP', tailscaleIpDisplay(status, canConnect, isLoggedIn), '']
+		const tailscaleModule = section('Tailscale 信息', [
+			tailscaleInfoGrid([
+				['Tailscale 版本', tsVersionValue, tsVersionActions, 'version'],
+				['运行状态', runtimeLabel(installed, overview, status), runtimeAction, 'runtime'],
+				['登录状态', buildLoginStatusCell(
+					installed, canConnect, isLoggedIn, statusReadFailed, sessionSaved, status),
+				buildLoginStatusAction(installed, canConnect, isLoggedIn, statusReadFailed), 'login']
 			], peers, installed)
 		]);
 
 		manageConnectionPolling(self, overview, status, installed);
 
-		/* 4. 连接设置 — 2 列，与上面前两列对齐 */
-		let settingsModule;
-		if (installed) {
-			const settingsRows = SETTINGS_FIELDS.map(f =>
-				[settingsLabel(f[1], f[2]), settingsControl(f[0], f[3], upSettings, f[4], f[5])]
-			);
-			settingsRoot.appendChild(grid2(settingsRows));
-			settingsModule = section('连接设置 (tailscale up)', [
-				settingsRoot,
-				E('div', { class: 'ts-field-actions' }, [
-					E('button', {
-						class: 'btn cbi-button-save',
-						click: ui.createHandlerFn(self, function() {
-							const settings = collectUpSettings(settingsRoot);
-							return callSetUpSettings(settings).then(function(res) {
-								if (!res || res.success === false || res.error)
-									throw new Error((res && (res.message || res.error)) || '保存失败');
-								applyUpSettingsToForm(settingsRoot, res.settings || settings);
-								ui.addNotification(null, E('p', {}, '设置已保存。'));
-							}).catch(function(err) {
-								ui.addNotification(null, E('p', { class: 'alert-message error' },
-									(err && err.message) || '保存失败'));
-							});
-						})
-					}, '保存'),
-					E('button', {
-						class: 'btn cbi-button-apply important',
-						click: ui.createHandlerFn(self, function() {
-							const settings = collectUpSettings(settingsRoot);
-							return saveAndConfirmApplyUp(settings, settingsRoot).catch(function(err) {
-								if ((err && err.message) === '已取消')
-									return;
-								ui.addNotification(null, E('pre', { class: 'alert-message error', style: 'white-space:pre-wrap;' },
-									(err && err.message) || '应用失败'));
-							});
-						})
-					}, '保存并应用')
-				])
-			]);
-		} else {
-			settingsModule = section('连接设置 (tailscale up)', [
-				grid2([['说明', '安装 Tailscale 后可配置。']])
-			]);
-		}
-
 		const modules = [
 			E('link', { rel: 'stylesheet', href: L.resource('view/tailscale/overview.css') + '?v=' + CSS_REV }),
-			versionModule,
-			runtimeModule,
-			connectionModule,
-			settingsModule
+			pluginModule,
+			tailscaleModule
 		];
 
 		if (!rpcFailed) {
