@@ -6,8 +6,8 @@
 'require dom';
 
 /* 热部署后改此版本号，强制浏览器刷新 CSS/JS */
-const UI_REV = '1.0.2 build26070801';
-const CSS_REV = '20260708-10';
+const UI_REV = '1.0.2 build26070802';
+const CSS_REV = '20260708-12';
 const APP_NAME = 'Tailscale for OpenWRT';
 const GITHUB_URL = 'https://github.com/01BAI/luci-app-tailscale';
 const TAILSCALE_ADMIN_URL = 'https://login.tailscale.com/admin';
@@ -843,25 +843,47 @@ function applyVersionUpdateHints(self, res, installed) {
 	}
 }
 
+function reloadLuciPageHard() {
+	const url = new URL(location.href);
+	url.searchParams.set('_ts', String(Date.now()));
+	location.replace(url.toString());
+}
+
 function runLuciAppUpdate(tag) {
 	let pollTimer = null;
 	let pollAttempts = 0;
 	let finishedSuccess = false;
+	let rpcFailStreak = 0;
 	const statusEl = E('p', { class: 'spinning' }, '正在启动插件更新...');
 	const logEl = E('pre', { class: 'ts-install-log' }, '');
-	const closeBtn = E('button', {
-		class: 'btn cbi-button-action important',
-		style: 'display:none; margin-top:0.75rem;',
+	const actionWrap = E('div', {
+		class: 'ts-modal-actions',
+		style: 'display:none; margin-top:0.75rem; justify-content:flex-start;'
+	});
+	const refreshBtn = E('button', {
+		class: 'btn cbi-button-apply important',
+		style: 'display:none;',
 		click: function(ev) {
 			ev.preventDefault();
 			stopPoll();
 			ui.hideModal();
-			if (finishedSuccess)
-				location.reload();
+			reloadLuciPageHard();
+		}
+	}, '更新成功！刷新页面');
+	const closeBtn = E('button', {
+		class: 'btn cbi-button-neutral',
+		style: 'display:none;',
+		click: function(ev) {
+			ev.preventDefault();
+			stopPoll();
+			ui.hideModal();
 		}
 	}, '关闭');
 
-	ui.showModal('更新插件', [ statusEl, logEl, closeBtn ]);
+	actionWrap.appendChild(refreshBtn);
+	actionWrap.appendChild(closeBtn);
+
+	ui.showModal('更新插件', [ statusEl, logEl, actionWrap ]);
 
 	function stopPoll() {
 		if (pollTimer) {
@@ -879,16 +901,26 @@ function runLuciAppUpdate(tag) {
 
 	function finishUpdate(success, message) {
 		stopPoll();
-		statusEl.className = success ? 'label success' : 'alert-message error';
 		finishedSuccess = success;
-		statusEl.textContent = message || (success ? '插件更新完成' : '插件更新失败');
-		closeBtn.textContent = success ? '关闭并刷新页面' : '关闭';
-		closeBtn.style.display = '';
+		if (success) {
+			statusEl.className = '';
+			statusEl.textContent = '';
+			refreshBtn.style.display = '';
+			closeBtn.style.display = 'none';
+			actionWrap.style.display = '';
+		} else {
+			statusEl.className = 'alert-message error';
+			statusEl.textContent = message || '插件更新失败';
+			refreshBtn.style.display = 'none';
+			closeBtn.style.display = '';
+			actionWrap.style.display = '';
+		}
 	}
 
 	function pollProgress() {
 		pollAttempts++;
 		return callGetLuciUpdateProgress().then(function(p) {
+			rpcFailStreak = 0;
 			if (!p)
 				throw new Error('无法读取更新进度（RPC 无响应）');
 
@@ -900,7 +932,7 @@ function runLuciAppUpdate(tag) {
 				return;
 			}
 			if (p.done) {
-				finishUpdate(!!p.success, p.success ? '插件更新完成' : (p.message || '插件更新失败'));
+				finishUpdate(!!p.success, p.success ? '' : (p.message || '插件更新失败'));
 				return;
 			}
 
@@ -912,6 +944,12 @@ function runLuciAppUpdate(tag) {
 					Math.round(INSTALL_POLL_MAX * INSTALL_POLL_INTERVAL / 60000) +
 					' 分钟），请查看日志或刷新页面后重试');
 		}).catch(function(err) {
+			rpcFailStreak++;
+			if (!finishedSuccess && pollAttempts < INSTALL_POLL_MAX && rpcFailStreak < 40) {
+				statusEl.className = 'spinning';
+				statusEl.textContent = '后端服务重启中，继续等待...';
+				return;
+			}
 			stopPoll();
 			finishUpdate(false, (err && err.message) || '读取更新进度失败');
 		});
@@ -924,9 +962,7 @@ function runLuciAppUpdate(tag) {
 		return pollProgress();
 	}).catch(function(err) {
 		stopPoll();
-		ui.hideModal();
-		ui.addNotification(null, E('p', { class: 'alert-message error' },
-			(err && err.message) || '插件更新失败'));
+		finishUpdate(false, (err && err.message) || '插件更新失败');
 	});
 }
 

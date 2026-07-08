@@ -156,8 +156,9 @@ if ! opkg install --force-reinstall "$MAIN_IPK" 2>/dev/null; then
 	opkg install "$MAIN_IPK" || { log_error "❌  ipk 安装失败"; exit 1; }
 fi
 
+# 仅重启 rpcd 加载新后端；勿重启 uhttpd，否则会断开 LuCI 登录会话
 /etc/init.d/rpcd restart 2>/dev/null || true
-/etc/init.d/uhttpd restart 2>/dev/null || /etc/init.d/nginx restart 2>/dev/null || true
 
 log_info "✅  插件已更新至 ${TAG}"
+log_info "ℹ️  请在 LuCI 页面点击「刷新页面」或 Ctrl+F5 加载新界面"
 echo "OK"
