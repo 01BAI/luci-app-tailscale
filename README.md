@@ -41,7 +41,7 @@ curl -fsSL https://raw.githubusercontent.com/01BAI/luci-app-tailscale/main/scrip
 
 安装完成后浏览器打开 LuCI：**VPN → Tailscale**，在页面里安装 Tailscale 二进制并登录。
 
-**首次使用前**，维护者需在 GitHub 运行一次 Actions：**Actions → Build tailscaled for OpenWrt → Run workflow**，生成 Release 后路由器才能下载 `tailscaled` 二进制。
+**首次使用前**，维护者需在 GitHub 运行一次 Actions：**Actions → Build tailscaled for OpenWrt → Run workflow**，生成 Release 后路由器才能下载 `tailscaled` 二进制。之后 workflow 会每天检查 [Tailscale 官方 Release](https://github.com/tailscale/tailscale/releases)，发现本仓库尚未打包的新版本时自动交叉编译并发布；也可随时手动 Run workflow（勾选 `force` 可覆盖已有版本）。
 
 ---
 
@@ -170,7 +170,7 @@ make package/luci-app-tailscale/compile V=s
 | Workflow | 触发 | 产物 |
 |----------|------|------|
 | **Build luci-app-tailscale** | push `main` / tag `luci-v*` | ipk → Releases |
-| **Build tailscaled for OpenWrt** | 手动 Run workflow | `tailscaled-linux-*` |
+| **Build tailscaled for OpenWrt** | 每天定时检查官方 latest；或手动 Run workflow | `tailscaled-linux-*` |
 
 ---
 

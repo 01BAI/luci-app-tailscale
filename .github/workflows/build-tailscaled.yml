@@ -2,17 +2,27 @@
 # tailscaled: go build -tags ts_include_cli -ldflags='-s -w' ./cmd/tailscaled
 # derper:     go build -ldflags='-s -w' ./cmd/derper（与 tailscaled 同 tag，版本对齐）
 #
-# 使用：GitHub 网页 → Actions → Build tailscaled for OpenWrt → Run workflow
+# 触发方式：
+#   - 定时：每天检查官方 latest，本仓库尚无对应 Release 时自动打包
+#   - 手动：Actions → Build tailscaled for OpenWrt → Run workflow
 
 name: Build tailscaled for OpenWrt
 
 on:
+  schedule:
+    # 每天 08:00 UTC（北京时间 16:00）检查官方是否有新版本
+    - cron: "0 8 * * *"
   workflow_dispatch:
     inputs:
       tailscale_version:
         description: "Tailscale 版本 tag，例如 v1.98.8；留空则自动取官方 latest"
         required: false
         default: ""
+      force:
+        description: "即使本仓库已有该版本 Release，也强制重新编译发布"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -29,24 +39,57 @@ jobs:
     outputs:
       tag: ${{ steps.out.outputs.tag }}
       version: ${{ steps.out.outputs.version }}
+      should_build: ${{ steps.out.outputs.should_build }}
     steps:
       - name: Resolve Tailscale version
         id: out
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT: ${{ github.event.inputs.tailscale_version || '' }}
+          FORCE: ${{ github.event.inputs.force || 'false' }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
-          INPUT="${{ github.event.inputs.tailscale_version }}"
+          set -e
           if [ -n "$INPUT" ]; then
             TAG="$INPUT"
           else
-            TAG="$(curl -fsSL https://api.github.com/repos/${{ env.REPO_OFFICIAL }}/releases/latest | jq -r '.tag_name')"
+            TAG="$(curl -fsSL "https://api.github.com/repos/${{ env.REPO_OFFICIAL }}/releases/latest" | jq -r '.tag_name')"
           fi
           [ -n "$TAG" ] && [ "$TAG" != "null" ] || { echo "无法获取 Tailscale 版本"; exit 1; }
           VER="${TAG#v}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${VER}" >> "$GITHUB_OUTPUT"
-          echo "将构建 Tailscale ${TAG}"
+          echo "官方目标版本: ${TAG}"
+
+          EXISTS=false
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            EXISTS=true
+            echo "本仓库已有 Release: ${TAG}"
+          else
+            echo "本仓库尚无 Release: ${TAG}"
+          fi
+
+          SHOULD_BUILD=true
+          if [ "$EXISTS" = "true" ]; then
+            if [ "$EVENT_NAME" = "schedule" ]; then
+              SHOULD_BUILD=false
+              echo "定时检查：版本已存在，跳过构建"
+            elif [ "$FORCE" != "true" ]; then
+              SHOULD_BUILD=false
+              echo "手动触发：版本已存在且未勾选 force，跳过构建"
+            else
+              echo "手动触发：force=true，将覆盖重新发布 ${TAG}"
+            fi
+          fi
+
+          echo "should_build=${SHOULD_BUILD}" >> "$GITHUB_OUTPUT"
+          if [ "$SHOULD_BUILD" = "true" ]; then
+            echo "将构建 Tailscale ${TAG}"
+          fi
 
   build:
     needs: resolve
+    if: needs.resolve.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -137,6 +180,7 @@ jobs:
 
   release:
     needs: [resolve, build]
+    if: needs.resolve.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Download all binaries
