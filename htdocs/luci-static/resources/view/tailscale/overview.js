@@ -6,7 +6,7 @@
 'require dom';
 
 /* 热部署后改此版本号，强制浏览器刷新 CSS/JS */
-const UI_REV = '1.0.2 build26070802';
+const UI_REV = '1.0.3 build26091501';
 const CSS_REV = '20260708-12';
 const APP_NAME = 'Tailscale for OpenWRT';
 const GITHUB_URL = 'https://github.com/01BAI/luci-app-tailscale';
@@ -470,11 +470,22 @@ function peersTable(peers) {
 	]);
 }
 
+function sortPeersByName(peers) {
+	return peers.sort(function(a, b) {
+		const an = String(a.name || '');
+		const bn = String(b.name || '');
+		const byName = an.localeCompare(bn, undefined, { sensitivity: 'base', numeric: true });
+		if (byName !== 0)
+			return byName;
+		return String(a.ip || '').localeCompare(String(b.ip || ''), undefined, { numeric: true });
+	});
+}
+
 function normalizePeers(peers) {
 	if (!peers)
 		return [];
 	if (Array.isArray(peers))
-		return peers.map(function(p) {
+		return sortPeersByName(peers.map(function(p) {
 			return {
 				name: p.name || '-',
 				ip: p.ip || '-',
@@ -489,11 +500,11 @@ function normalizePeers(peers) {
 				routes: extractSubnetRoutes(p) || (p.routes ? String(p.routes).replace(/,/g, ', ') : ''),
 				path: p.self ? '' : (p.path || extractPeerPath(p))
 			};
-		});
+		}));
 	if (typeof peers !== 'object')
 		return [];
 
-	return Object.keys(peers).map(function(id) {
+	return sortPeersByName(Object.keys(peers).map(function(id) {
 		const p = peers[id] || {};
 		const ip = p.ip || (Array.isArray(p.TailscaleIPs) ? p.TailscaleIPs[0] : (p.TailscaleIPs || ''));
 		const name = p.name || p.hostname ||
@@ -515,7 +526,7 @@ function normalizePeers(peers) {
 			routes: routes,
 			path: (p.self === true || p.self === 1) ? '' : extractPeerPath(p)
 		};
-	});
+	}));
 }
 
 function peersWithLocalFallback(peers, status) {
